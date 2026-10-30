@@ -259,3 +259,84 @@ describe("5. Anti-Spoofing & Live Client Ground Truth (PRD 5.1 & 5.3)", () => {
     expect(() => playChime()).not.toThrow();
   });
 });
+
+describe("6. Activity-Based 24-Hour Queue Lease & Multi-Queue Inactivity (Feature Update)", () => {
+  type MockQueue = {
+    id: string;
+    title: string;
+    last_activity_at: number;
+    expires_at: number;
+    tickets: Array<{ id: string; status: "WAITING" | "SERVING" | "COMPLETED" | "REVOKED" }>;
+  };
+
+  class MockQueueEngine {
+    public queues: Map<string, MockQueue> = new Map();
+
+    public createQueue(id: string, title: string, now: number): MockQueue {
+      const q: MockQueue = {
+        id,
+        title,
+        last_activity_at: now,
+        expires_at: now + 24 * 60 * 60 * 1000,
+        tickets: [],
+      };
+      this.queues.set(id, q);
+      return q;
+    }
+
+    // Emulates touch_queue_activity trigger on ticket actions
+    public touchActivity(queueId: string, now: number) {
+      const q = this.queues.get(queueId);
+      if (q) {
+        q.last_activity_at = now;
+        q.expires_at = now + 24 * 60 * 60 * 1000;
+      }
+    }
+
+    // Emulates cleanup_inactive_queues stored procedure
+    public cleanupInactiveQueues(now: number): number {
+      let cleaned = 0;
+      for (const [id, q] of this.queues.entries()) {
+        const hasActiveTickets = q.tickets.some((t) => t.status === "WAITING" || t.status === "SERVING");
+        if (q.expires_at < now && !hasActiveTickets) {
+          this.queues.delete(id);
+          cleaned++;
+        }
+      }
+      return cleaned;
+    }
+  }
+
+  it("extends expires_at by 24 hours on each qualifying ticket event (touch_queue_activity)", () => {
+    const engine = new MockQueueEngine();
+    const t0 = new Date("2026-10-30T10:00:00Z").getTime();
+    const q = engine.createQueue("q1", "Registrar Intake", t0);
+
+    expect(q.expires_at).toBe(t0 + 24 * 60 * 60 * 1000);
+
+    // 12 hours later, a visitor joins or ticket transitions
+    const t12 = t0 + 12 * 60 * 60 * 1000;
+    engine.touchActivity("q1", t12);
+
+    expect(q.last_activity_at).toBe(t12);
+    // expires_at must be pushed to t12 + 24 hours
+    expect(q.expires_at).toBe(t12 + 24 * 60 * 60 * 1000);
+  });
+
+  it("cleans up expired queues only when no WAITING or SERVING tickets remain", () => {
+    const engine = new MockQueueEngine();
+    const t0 = new Date("2026-10-30T10:00:00Z").getTime();
+    const qExpiredEmpty = engine.createQueue("q-empty", "Empty Desk", t0);
+    const qExpiredWithWaiting = engine.createQueue("q-waiting", "Busy Desk", t0);
+
+    qExpiredWithWaiting.tickets.push({ id: "t1", status: "WAITING" });
+
+    // Advance 25 hours into future without new activity
+    const t25 = t0 + 25 * 60 * 60 * 1000;
+
+    const cleaned = engine.cleanupInactiveQueues(t25);
+    expect(cleaned).toBe(1);
+    expect(engine.queues.has("q-empty")).toBe(false);
+    expect(engine.queues.has("q-waiting")).toBe(true);
+  });
+});

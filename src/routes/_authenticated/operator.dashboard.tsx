@@ -8,6 +8,11 @@ import { DEFAULT_BUFFER_SIZE, MAX_STRIKES, formatWait } from "@/lib/q";
 import { downloadVenuePoster } from "@/lib/poster-generator";
 
 export const Route = createFileRoute("/_authenticated/operator/dashboard")({
+  validateSearch: (search: Record<string, unknown>): { queueId?: string | undefined } => {
+    return {
+      queueId: typeof search["queueId"] === "string" ? search["queueId"] : undefined,
+    };
+  },
   head: () => ({
     meta: [
       { title: "Operator Console — Q" },
@@ -22,7 +27,19 @@ export const Route = createFileRoute("/_authenticated/operator/dashboard")({
 });
 
 type Operator = { id: string; email: string; queue_id: string | null; counter_name: string; role: string };
-type Queue = { id: string; venue_name: string; title: string; status: string; expires_at?: string | null };
+type Queue = { id: string; venue_name: string; title: string; status: string; expires_at?: string | null; last_activity_at?: string | null };
+type MyQueue = {
+  queue_id: string;
+  title: string;
+  venue_name: string;
+  status: string;
+  waiting_count: number;
+  serving_count: number;
+  role: string;
+  last_activity_at: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+};
 type Ticket = {
   id: string;
   ticket_number: number;
@@ -38,7 +55,10 @@ type Ticket = {
 
 function Dashboard() {
   const navigate = useNavigate();
+  const searchParams = Route.useSearch();
   const [op, setOp] = useState<Operator | null | undefined>(undefined);
+  const [myQueues, setMyQueues] = useState<MyQueue[]>([]);
+  const [activeQueueId, setActiveQueueId] = useState<string | null>(searchParams.queueId ?? null);
   const [queue, setQueue] = useState<Queue | null>(null);
   const [operatorsMap, setOperatorsMap] = useState<Record<string, { email: string; counter_name: string }>>({});
   const [operatorsList, setOperatorsList] = useState<Array<{ id: string; email: string; counter_name: string; role: string }>>([]);
@@ -48,7 +68,8 @@ function Dashboard() {
   const [search, setSearch] = useState("");
   const [qr, setQr] = useState<string | null>(null);
   const [dynamicBuffer, setDynamicBuffer] = useState<number>(DEFAULT_BUFFER_SIZE);
-  const [mobileTab, setMobileTab] = useState<"queue" | "qr">("queue");
+  const [mobileTab, setMobileTab] = useState<"queue" | "qr" | "hub">("queue");
+  const [showHubModal, setShowHubModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -58,30 +79,88 @@ function Dashboard() {
     return () => clearInterval(i);
   }, []);
 
+  // Fetch operator and multi-queue list
+  const loadMyQueues = useCallback(async () => {
+    const {
+      data: { user: authUser },
+    } = await supabase.auth.getUser();
+    if (!authUser) return;
+
+    // Load operator record
+    const { data: o } = await supabase.from("operators").select("*").eq("id", authUser.id).maybeSingle();
+    setOp(o ?? null);
+
+    // Call RPC get_my_queues
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: qList, error } = await (supabase.rpc as any)("get_my_queues");
+    if (!error && qList && Array.isArray(qList)) {
+      setMyQueues(qList as MyQueue[]);
+
+      // Determine active queue:
+      // Priority 1: URL search param
+      // Priority 2: already selected activeQueueId
+      // Priority 3: first queue from get_my_queues
+      // Priority 4: operator's legacy queue_id
+      setActiveQueueId((curr) => {
+        if (searchParams.queueId) return searchParams.queueId;
+        if (curr && qList.some((q: MyQueue) => q.queue_id === curr)) return curr;
+        if (qList.length > 0 && qList[0]) return qList[0].queue_id;
+        return o?.queue_id ?? null;
+      });
+    } else {
+      // Fallback: load directly from queues if RPC not yet deployed
+      if (o?.queue_id) {
+        const { data: singleQ } = await supabase.from("queues").select("*").eq("id", o.queue_id).maybeSingle();
+        if (singleQ) {
+          const fallbackMyQ: MyQueue = {
+            queue_id: singleQ.id,
+            title: singleQ.title,
+            venue_name: singleQ.venue_name,
+            status: singleQ.status,
+            waiting_count: 0,
+            serving_count: 0,
+            role: o.role || "ADMIN",
+            last_activity_at: singleQ.last_activity_at,
+            expires_at: singleQ.expires_at,
+            created_at: singleQ.created_at,
+          };
+          setMyQueues([fallbackMyQ]);
+          setActiveQueueId((curr) => curr ?? singleQ.id);
+        }
+      }
+    }
+  }, [searchParams.queueId]);
+
   useEffect(() => {
-    supabase.auth.getUser().then(async ({ data }) => {
-      if (!data.user) return;
-      const { data: o } = await supabase.from("operators").select("*").eq("id", data.user.id).maybeSingle();
-      setOp(o ?? null);
+    loadMyQueues();
+  }, [loadMyQueues]);
+
+  // Sync URL when active queue changes
+  const switchQueue = (newQId: string) => {
+    setActiveQueueId(newQId);
+    navigate({
+      to: "/operator/dashboard",
+      search: { queueId: newQId },
+      replace: true,
     });
-  }, []);
+  };
 
-  const queueId = op?.queue_id ?? null;
-  const joinUrl = queueId ? `https://queue-engine.vercel.app/join/${queueId}` : "";
+  const joinUrl = activeQueueId ? `https://queue-engine.vercel.app/join/${activeQueueId}` : "";
 
+  // Load active queue data (tickets, operators, dynamic buffer)
   const load = useCallback(async () => {
-    if (!queueId) return;
+    if (!activeQueueId) return;
     const [{ data: q }, { data: ts }, { data: ops }, { data: bufSize }] = await Promise.all([
-      supabase.from("queues").select("id,venue_name,title,status,expires_at").eq("id", queueId).maybeSingle(),
+      supabase.from("queues").select("id,venue_name,title,status,expires_at,last_activity_at").eq("id", activeQueueId).maybeSingle(),
       supabase
         .from("tickets")
         .select("id,ticket_number,full_name,phone_number,status,strikes,sort_order,serving_operator_id,created_at,served_at")
-        .eq("queue_id", queueId)
+        .eq("queue_id", activeQueueId)
         .in("status", ["WAITING", "SERVING"])
         .order("sort_order", { ascending: true }),
-      supabase.from("operators").select("id,email,counter_name,role").eq("queue_id", queueId),
+      supabase.from("operators").select("id,email,counter_name,role").eq("queue_id", activeQueueId),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: queueId }),
+      (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: activeQueueId }),
     ]);
 
     if (q) setQueue(q);
@@ -101,15 +180,18 @@ function Dashboard() {
     } else {
       setDynamicBuffer(DEFAULT_BUFFER_SIZE);
     }
-  }, [queueId]);
+  }, [activeQueueId]);
 
   useEffect(() => {
-    if (!queueId) return;
+    if (!activeQueueId) return;
     load();
     const ch = supabase
-      .channel(`desk-${queueId}-${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "tickets", filter: `queue_id=eq.${queueId}` }, () => load())
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "queues", filter: `id=eq.${queueId}` }, () => load())
+      .channel(`desk-${activeQueueId}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tickets", filter: `queue_id=eq.${activeQueueId}` }, () => {
+        load();
+        loadMyQueues();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "queues", filter: `id=eq.${activeQueueId}` }, () => load())
       .subscribe();
     const onVis = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVis);
@@ -117,14 +199,14 @@ function Dashboard() {
       supabase.removeChannel(ch);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [queueId, load]);
+  }, [activeQueueId, load, loadMyQueues]);
 
   useEffect(() => {
-    if (!queueId) return;
+    if (!activeQueueId) return;
     import("qrcode").then((m) =>
       m.toDataURL(joinUrl, { margin: 1, width: 400, color: { dark: "#111111", light: "#FFFFFF" } }).then(setQr),
     );
-  }, [queueId, joinUrl]);
+  }, [activeQueueId, joinUrl]);
 
   // Operator Actions
   async function handleServe(ticketId: string, ticketNumber: number) {
@@ -139,6 +221,7 @@ function Dashboard() {
     if (error) toast.error(error.message);
     else toast.success(`Serving #${ticketNumber}`);
     load();
+    loadMyQueues();
   }
 
   async function handleComplete(ticketId: string, ticketNumber: number) {
@@ -153,6 +236,7 @@ function Dashboard() {
     if (error) toast.error(error.message);
     else toast.success(`#${ticketNumber} completed`);
     load();
+    loadMyQueues();
   }
 
   async function handleAbsent(ticketId: string, ticketNumber: number, currentStrikes: number) {
@@ -167,47 +251,98 @@ function Dashboard() {
     else {
       const nextStrikes = currentStrikes + 1;
       if (nextStrikes >= MAX_STRIKES) {
-        toast.error(`#${ticketNumber} revoked (3 strikes)`);
+        toast.error(`#${ticketNumber} marked absent (Revoked after 3 strikes)`);
       } else {
-        toast.warning(`#${ticketNumber} absent (Strike ${nextStrikes}/3) · bumped behind buffer`);
+        toast.warning(`#${ticketNumber} marked absent (Strike ${nextStrikes}/3 — Bumped behind top ${dynamicBuffer})`);
       }
     }
     load();
+    loadMyQueues();
+  }
+
+  async function handleToggleIntake() {
+    if (!queue || busy) return;
+    const nextStatus = queue.status === "OPEN" ? "PAUSED" : "OPEN";
+    setBusy(true);
+    const { error } = await supabase.from("queues").update({ status: nextStatus }).eq("id", queue.id);
+    setBusy(false);
+    if (error) toast.error(error.message);
+    else {
+      setQueue({ ...queue, status: nextStatus });
+      toast.success(`Queue is now ${nextStatus}`);
+      loadMyQueues();
+    }
   }
 
   async function handleInviteClerk(e: React.FormEvent) {
     e.preventDefault();
-    if (!inviteEmail.trim() || !queueId) return;
+    if (!activeQueueId || !inviteEmail.trim() || inviting) return;
     setInviting(true);
-    const { error } = await supabase.from("operator_invitations").insert({
-      queue_id: queueId,
-      email: inviteEmail.trim().toLowerCase(),
-    });
+    const emailToInvite = inviteEmail.trim().toLowerCase();
+
+    // Insert into operator_invitations
+    const { error } = await supabase
+      .from("operator_invitations")
+      .insert({ queue_id: activeQueueId, email: emailToInvite });
+
     setInviting(false);
+    if (error) {
+      if (error.code === "23505") {
+        toast.error("This email is already invited to this queue.");
+      } else {
+        toast.error(error.message);
+      }
+    } else {
+      toast.success(`Invitation recorded for ${emailToInvite}`);
+      setInviteEmail("");
+    }
+  }
+
+  async function handleDeleteQueue(qId: string, waitingCount: number) {
+    if (waitingCount > 0) {
+      toast.error("Cannot delete a queue with active waiting tickets.");
+      return;
+    }
+    if (!confirm("Are you sure you want to permanently delete this queue?")) return;
+
+    const { error } = await supabase.from("queues").delete().eq("id", qId);
     if (error) {
       toast.error(error.message);
     } else {
-      toast.success(`Invitation sent to ${inviteEmail.trim()}`);
-      setInviteEmail("");
+      toast.success("Queue deleted successfully.");
+      loadMyQueues();
+      if (activeQueueId === qId) {
+        setActiveQueueId(null);
+      }
     }
   }
 
   async function signOut() {
     await supabase.auth.signOut();
-    navigate({ to: "/operator/login" });
+    navigate({ to: "/" });
   }
 
-  const waitingTickets = useMemo(() => tickets.filter((t) => t.status === "WAITING"), [tickets]);
+  // Sieve tickets into groups
   const servingTickets = useMemo(() => tickets.filter((t) => t.status === "SERVING"), [tickets]);
-  const onDeckTickets = useMemo(() => waitingTickets.slice(0, dynamicBuffer), [waitingTickets, dynamicBuffer]);
-  const offPremiseTickets = useMemo(() => {
-    const list = waitingTickets.slice(dynamicBuffer);
-    const q = search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((t) => t.full_name.toLowerCase().includes(q) || String(t.ticket_number).includes(q));
-  }, [waitingTickets, dynamicBuffer, search]);
+  const waitingTickets = useMemo(() => tickets.filter((t) => t.status === "WAITING"), [tickets]);
 
-  // Loading state
+  // Buffer separation based on dynamic buffer size
+  const onDeckBuffer = useMemo(() => waitingTickets.slice(0, dynamicBuffer), [waitingTickets, dynamicBuffer]);
+  const offPremiseRoam = useMemo(() => waitingTickets.slice(dynamicBuffer), [waitingTickets, dynamicBuffer]);
+
+  const filteredOnDeck = useMemo(() => {
+    if (!search.trim()) return onDeckBuffer;
+    const s = search.toLowerCase();
+    return onDeckBuffer.filter((t) => t.ticket_number.toString().includes(s) || t.full_name.toLowerCase().includes(s));
+  }, [onDeckBuffer, search]);
+
+  const filteredRoam = useMemo(() => {
+    if (!search.trim()) return offPremiseRoam;
+    const s = search.toLowerCase();
+    return offPremiseRoam.filter((t) => t.ticket_number.toString().includes(s) || t.full_name.toLowerCase().includes(s));
+  }, [offPremiseRoam, search]);
+
+  // Loading indicator
   if (op === undefined) {
     return (
       <main className="min-h-screen bg-[#FBF9F5] p-8 text-[#111111]">
@@ -218,8 +353,8 @@ function Dashboard() {
     );
   }
 
-  // Empty state: No active queue
-  if (!op || !op.queue_id) {
+  // Empty state: No active queue found
+  if (!activeQueueId || myQueues.length === 0) {
     return (
       <main className="min-h-screen bg-[#FBF9F5] text-[#111111] p-6 md:p-12">
         <div className="mx-auto max-w-2xl border border-[#E8E5DF] bg-[#FFFFFF] p-8 md:p-12 shadow-sm text-center">
@@ -251,8 +386,9 @@ function Dashboard() {
         <CreateQueueModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
-          onSuccess={() => {
-            window.location.reload();
+          onSuccess={(newId) => {
+            loadMyQueues();
+            if (newId) switchQueue(newId);
           }}
         />
       </main>
@@ -263,25 +399,54 @@ function Dashboard() {
 
   return (
     <main className="min-h-screen bg-[#FBF9F5] text-[#111111]">
-      {/* Top Header */}
+      {/* Top Header with Multi-Queue Switcher */}
       <header className="sticky top-0 z-30 border-b border-[#E8E5DF] bg-[#FBF9F5]/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-          <div className="flex items-center gap-4">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-3.5">
+          <div className="flex items-center gap-3 md:gap-4 flex-wrap">
             <Link to="/" className="font-mono text-2xl font-black tracking-tighter text-[#111111]">
               Q
             </Link>
             <div className="h-4 w-px bg-[#E8E5DF]" />
-            <div>
-              <p className="truncate font-mono text-sm font-bold text-[#111111]">{queue?.title}</p>
-              <p className="font-mono text-xs text-[#666666]">
-                {op.counter_name} • {op.email}
-              </p>
+
+            {/* Multi-Queue Switcher Dropdown */}
+            <div className="flex items-center gap-2">
+              <select
+                aria-label="Select Active Queue"
+                value={activeQueueId}
+                onChange={(e) => switchQueue(e.target.value)}
+                className="h-9 border border-[#E8E5DF] bg-[#FFFFFF] px-3 font-mono text-xs font-bold text-[#111111] outline-none hover:border-[#111111] focus:border-[#111111] max-w-[220px] sm:max-w-xs truncate cursor-pointer shadow-xs"
+              >
+                {myQueues.map((mq) => (
+                  <option key={mq.queue_id} value={mq.queue_id}>
+                    {mq.title} ({mq.waiting_count})
+                  </option>
+                ))}
+              </select>
+
+              {/* + New Queue Action */}
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(true)}
+                className="h-9 px-3 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-xs font-semibold text-[#111111] hover:bg-[#F4F1EA] transition-colors"
+                title="Create an additional queue"
+              >
+                + New Queue
+              </button>
+
+              {/* All Queues Overview Button */}
+              <button
+                type="button"
+                onClick={() => setShowHubModal(true)}
+                className="hidden sm:inline-flex h-9 px-3 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-xs font-semibold text-[#666666] hover:text-[#111111] hover:bg-[#F4F1EA] transition-colors"
+              >
+                All Queues ({myQueues.length})
+              </button>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Engine Indicator */}
-            <div className="hidden sm:flex items-center gap-2 border border-[#E8E5DF] bg-[#FFFFFF] px-3.5 py-1.5 font-mono text-xs">
+            {/* Waiting & Dynamic Buffer Telemetry */}
+            <div className="hidden sm:flex items-center gap-2 border border-[#E8E5DF] bg-[#FFFFFF] px-3.5 py-1.5 font-mono text-xs shadow-xs">
               <span className="text-[#666666]">Waiting:</span>
               <span className="font-bold text-[#111111]">{waitingTickets.length}</span>
               <span className="mx-1 text-[#E8E5DF]">|</span>
@@ -289,11 +454,12 @@ function Dashboard() {
               <span className="font-bold text-[#111111]">{dynamicBuffer}</span>
             </div>
 
+            {/* Lobby TV View */}
             <Link
               to="/display/$queueId"
-              params={{ queueId: op.queue_id }}
+              params={{ queueId: activeQueueId }}
               target="_blank"
-              className="inline-flex min-h-[44px] items-center border border-[#E8E5DF] bg-[#FFFFFF] px-3.5 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-[#111111] hover:bg-[#F4F1EA]"
+              className="inline-flex min-h-[38px] items-center border border-[#E8E5DF] bg-[#FFFFFF] px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-[#111111] hover:bg-[#F4F1EA] transition-colors shadow-xs"
               title="Launch TV Waiting Room View"
             >
               Lobby TV ↗
@@ -301,7 +467,7 @@ function Dashboard() {
 
             <button
               onClick={signOut}
-              className="min-h-[44px] px-3 font-mono text-xs font-medium text-[#666666] hover:text-[#111111]"
+              className="min-h-[38px] px-2.5 font-mono text-xs font-medium text-[#666666] hover:text-[#111111]"
             >
               Exit
             </button>
@@ -309,13 +475,13 @@ function Dashboard() {
         </div>
       </header>
 
-      {/* Mobile-Only Segmented Tabs */}
+      {/* Mobile Segmented Tabs */}
       <div className="block md:hidden border-b border-[#E8E5DF] bg-[#FFFFFF]">
-        <div className="grid grid-cols-2">
+        <div className="grid grid-cols-3">
           <button
             type="button"
             onClick={() => setMobileTab("queue")}
-            className={`min-h-[48px] font-mono text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${
+            className={`min-h-[44px] font-mono text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${
               mobileTab === "queue"
                 ? "border-[#111111] text-[#111111]"
                 : "border-transparent text-[#666666] hover:text-[#111111]"
@@ -326,22 +492,76 @@ function Dashboard() {
           <button
             type="button"
             onClick={() => setMobileTab("qr")}
-            className={`min-h-[48px] font-mono text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${
+            className={`min-h-[44px] font-mono text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${
               mobileTab === "qr"
                 ? "border-[#111111] text-[#111111]"
                 : "border-transparent text-[#666666] hover:text-[#111111]"
             }`}
           >
-            Venue QR & Poster
+            Venue QR
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab("hub")}
+            className={`min-h-[44px] font-mono text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${
+              mobileTab === "hub"
+                ? "border-[#111111] text-[#111111]"
+                : "border-transparent text-[#666666] hover:text-[#111111]"
+            }`}
+          >
+            All Queues
           </button>
         </div>
       </div>
 
       {/* Main 2-Column Responsive Layout */}
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 md:px-8">
+        {/* Mobile Hub Tab */}
+        {mobileTab === "hub" && (
+          <div className="block md:hidden mb-8">
+            <h2 className="font-mono text-sm font-bold uppercase text-[#111111] mb-4">All Managed Queues</h2>
+            <div className="space-y-4">
+              {myQueues.map((mq) => (
+                <div key={mq.queue_id} className="border border-[#E8E5DF] bg-[#FFFFFF] p-5 shadow-xs">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="font-mono text-sm font-bold text-[#111111]">{mq.title}</h3>
+                      <p className="font-mono text-xs text-[#666666] mt-0.5">{mq.role} • {mq.status}</p>
+                    </div>
+                    <span className="font-mono text-xs font-bold bg-[#FBF9F5] border border-[#E8E5DF] px-2.5 py-1">
+                      {mq.waiting_count} waiting
+                    </span>
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        switchQueue(mq.queue_id);
+                        setMobileTab("queue");
+                      }}
+                      className="flex-1 bg-[#111111] py-2 font-mono text-xs font-bold text-[#FBF9F5]"
+                    >
+                      Open
+                    </button>
+                    {mq.role === "ADMIN" && mq.waiting_count === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteQueue(mq.queue_id, mq.waiting_count)}
+                        className="px-3 border border-[#E5484D] text-[#E5484D] font-mono text-xs font-bold"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-8 md:grid-cols-[65%_35%]">
           {/* LEFT COLUMN: The Live Queue Hopper */}
-          <div className={`space-y-8 ${mobileTab === "qr" ? "hidden md:block" : "block"}`}>
+          <div className={`space-y-8 ${mobileTab === "qr" || mobileTab === "hub" ? "hidden md:block" : "block"}`}>
             {/* Currently Serving Section */}
             {servingTickets.length > 0 && (
               <section className="border border-[#E8E5DF] bg-[#FFFFFF] p-6 shadow-sm">
@@ -357,7 +577,7 @@ function Dashboard() {
 
                 <div className="mt-5 space-y-4">
                   {servingTickets.map((t) => {
-                    const isMyTicket = t.serving_operator_id === op.id;
+                    const isMyTicket = op ? t.serving_operator_id === op.id : false;
                     const servingOp = t.serving_operator_id ? operatorsMap[t.serving_operator_id] : null;
 
                     return (
@@ -368,43 +588,36 @@ function Dashboard() {
                         }`}
                       >
                         <div className="flex items-baseline gap-5">
-                          <span className="font-mono text-4xl font-extrabold text-[#111111]">
-                            #{String(t.ticket_number).padStart(3, "0")}
+                          <span className="font-mono text-3xl md:text-4xl font-extrabold tracking-tight text-[#111111]">
+                            #{t.ticket_number}
                           </span>
                           <div>
-                            <p className="font-mono text-lg font-bold text-[#111111]">{t.full_name}</p>
-                            <p className="font-mono text-xs text-[#666666]">
-                              {isMyTicket ? "Assigned to your counter" : `At ${servingOp?.counter_name || "Counter"}`}
-                              {t.served_at && ` • ${formatWait(t.served_at, now)}`}
+                            <p className="font-mono text-base font-bold text-[#111111]">{t.full_name}</p>
+                            <p className="font-mono text-xs text-[#666666] mt-0.5">
+                              {servingOp ? `${servingOp.counter_name} (${servingOp.email})` : "Desk Clerk"} • Serving for{" "}
+                              {formatWait(t.served_at, now)}
                             </p>
                           </div>
                         </div>
 
-                        {/* Tactile 44px+ controls */}
-                        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                        {/* Inline Operator Actions */}
+                        <div className="flex items-center gap-3">
                           <button
                             type="button"
-                            onClick={() => handleAbsent(t.id, t.ticket_number, t.strikes)}
                             disabled={busy}
-                            className="min-h-[44px] flex-1 sm:flex-initial px-4 py-2 border border-[#E5484D] font-mono text-xs font-bold uppercase tracking-wider text-[#E5484D] transition-colors hover:bg-[#E5484D]/10 disabled:opacity-40"
+                            onClick={() => handleAbsent(t.id, t.ticket_number, t.strikes)}
+                            className="min-h-[44px] min-w-[90px] border border-[#E5484D] bg-[#FFFFFF] px-4 font-mono text-xs font-bold uppercase tracking-wider text-[#E5484D] transition-colors hover:bg-[#E5484D]/10"
                           >
                             Absent
                           </button>
-
-                          {isMyTicket ? (
-                            <button
-                              type="button"
-                              onClick={() => handleComplete(t.id, t.ticket_number)}
-                              disabled={busy}
-                              className="min-h-[44px] flex-1 sm:flex-initial px-6 py-2 bg-[#111111] font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] transition-colors hover:bg-neutral-800 disabled:opacity-40"
-                            >
-                              Done
-                            </button>
-                          ) : (
-                            <span className="flex min-h-[44px] items-center border border-[#E8E5DF] bg-[#FFFFFF] px-4 font-mono text-xs text-[#666666]">
-                              {servingOp?.counter_name || "In Progress"}
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleComplete(t.id, t.ticket_number)}
+                            className="min-h-[44px] min-w-[90px] bg-[#111111] px-5 font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] transition-colors hover:bg-neutral-800"
+                          >
+                            Done ✓
+                          </button>
                         </div>
                       </div>
                     );
@@ -413,149 +626,158 @@ function Dashboard() {
               </section>
             )}
 
-            {/* Physical On-Deck Zone (Top N slots) */}
-            <section className="border border-[#E8E5DF] bg-[#FFFFFF] p-6 shadow-sm">
-              <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[#E8E5DF] pb-4">
-                <div className="flex items-center gap-2.5">
-                  <span className="h-2 w-2 rounded-full bg-[#F76B15]" />
-                  <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#111111]">
-                    Physical On-Deck Zone (Top {dynamicBuffer})
-                  </h2>
-                </div>
-                <span className="font-mono text-[10px] text-[#666666] uppercase">
-                  Standing directly in front of counters
-                </span>
-              </div>
-
-              {onDeckTickets.length === 0 ? (
-                <p className="mt-8 py-6 text-center font-mono text-xs text-[#666666]">
-                  No visitors currently in the physical on-deck staging buffer.
-                </p>
-              ) : (
-                <div className="mt-4 divide-y divide-[#E8E5DF]">
-                  {onDeckTickets.map((t, idx) => (
-                    <div key={t.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
-                      <div className="flex items-baseline gap-4">
-                        <span className="w-8 font-mono text-xs font-bold text-[#666666]">P{idx + 1}</span>
-                        <span className="font-mono text-2xl font-bold text-[#111111]">
-                          #{String(t.ticket_number).padStart(3, "0")}
-                        </span>
-                        <div>
-                          <p className="font-mono text-sm font-bold text-[#111111]">{t.full_name}</p>
-                          <div className="flex items-center gap-2 font-mono text-[11px] text-[#666666]">
-                            <span>{t.phone_number || "No phone"}</span>
-                            <span>•</span>
-                            <span>Waited {formatWait(t.created_at, now)}</span>
-                            {t.strikes > 0 && (
-                              <span className="text-[#E5484D] font-bold">({t.strikes}/{MAX_STRIKES} strikes)</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Per-row inline controls */}
-                      <div className="flex items-center gap-2 w-full sm:w-auto">
-                        <button
-                          type="button"
-                          onClick={() => handleAbsent(t.id, t.ticket_number, t.strikes)}
-                          disabled={busy}
-                          className="min-h-[44px] flex-1 sm:flex-initial px-4 py-2 border border-[#E5484D] font-mono text-xs font-bold uppercase tracking-wider text-[#E5484D] transition-colors hover:bg-[#E5484D]/10 disabled:opacity-40"
-                        >
-                          Absent
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleServe(t.id, t.ticket_number)}
-                          disabled={busy}
-                          className="min-h-[44px] flex-1 sm:flex-initial px-6 py-2 bg-[#111111] font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] transition-colors hover:bg-neutral-800 disabled:opacity-40"
-                        >
-                          Serve
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* Off-Premise Free Roam Zone */}
+            {/* Waiting Hopper: On-Deck Dynamic Buffer & Off-Premise Roam */}
             <section className="border border-[#E8E5DF] bg-[#FFFFFF] p-6 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E8E5DF] pb-4">
                 <div>
-                  <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#666666]">
-                    Off-Premise Free Roam ({offPremiseTickets.length})
+                  <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-[#111111]">
+                    Queue Hopper ({waitingTickets.length} waiting)
                   </h2>
-                  <p className="font-mono text-[10px] text-[#666666] mt-0.5">
-                    Position {dynamicBuffer + 1}+ waiting freely outside the hall
+                  <p className="font-mono text-xs text-[#666666] mt-0.5">
+                    Physical Staging Buffer: Top {dynamicBuffer} tickets
                   </p>
                 </div>
                 <input
                   type="text"
+                  placeholder="Filter ticket or name…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name or #…"
-                  className="h-10 w-48 border border-[#E8E5DF] bg-[#FBF9F5] px-3 font-mono text-xs text-[#111111] outline-none placeholder:text-[#999999] focus:border-[#111111]"
+                  className="h-9 w-full sm:w-64 border border-[#E8E5DF] bg-[#FBF9F5] px-3 font-mono text-xs text-[#111111] outline-none placeholder:text-[#999999] focus:border-[#111111]"
                 />
               </div>
 
-              {offPremiseTickets.length === 0 ? (
-                <p className="mt-8 py-4 text-center font-mono text-xs text-[#666666]">
-                  No visitors waiting in the off-premise zone.
-                </p>
-              ) : (
-                <div className="mt-4 divide-y divide-[#E8E5DF]">
-                  {offPremiseTickets.map((t, idx) => (
-                    <div key={t.id} className="flex flex-wrap items-center justify-between gap-4 py-3.5">
-                      <div className="flex items-baseline gap-4">
-                        <span className="w-8 font-mono text-xs text-[#666666]">
-                          P{idx + dynamicBuffer + 1}
-                        </span>
-                        <span className="font-mono text-lg font-bold text-[#111111]">
-                          #{String(t.ticket_number).padStart(3, "0")}
-                        </span>
-                        <div>
-                          <p className="font-mono text-sm font-semibold text-[#111111]">{t.full_name}</p>
-                          <p className="font-mono text-[10px] text-[#666666]">
-                            Waited {formatWait(t.created_at, now)}
-                            {t.strikes > 0 && ` • Strike ${t.strikes}/${MAX_STRIKES}`}
-                          </p>
+              {/* Group A: On-Deck Physical Buffer */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between border-b border-[#E8E5DF] pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-[#111111]" />
+                    <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#111111]">
+                      On-Deck Staging Buffer (Top {dynamicBuffer})
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] text-[#30A46C] font-semibold">
+                    Staged at Counters
+                  </span>
+                </div>
+
+                <div className="mt-3 divide-y divide-[#E8E5DF]">
+                  {filteredOnDeck.length === 0 ? (
+                    <p className="py-6 text-center font-mono text-xs text-[#666666]">
+                      {waitingTickets.length === 0 ? "The queue hopper is completely clear." : "No matching tickets in buffer."}
+                    </p>
+                  ) : (
+                    filteredOnDeck.map((t, idx) => (
+                      <div
+                        key={t.id}
+                        className="flex flex-wrap items-center justify-between gap-3 py-3.5 transition-colors hover:bg-[#FBF9F5]/70"
+                      >
+                        <div className="flex items-center gap-4">
+                          <span className="font-mono text-xs text-[#666666] w-6">#{idx + 1}</span>
+                          <span className="font-mono text-xl font-black text-[#111111]">
+                            #{t.ticket_number}
+                          </span>
+                          <div>
+                            <span className="font-mono text-sm font-semibold text-[#111111]">{t.full_name}</span>
+                            <div className="flex items-center gap-2 font-mono text-xs text-[#666666]">
+                              <span>{formatWait(t.created_at, now)}</span>
+                              {t.strikes > 0 && (
+                                <span className="text-[#E5484D] font-bold">
+                                  ({t.strikes} strike{t.strikes > 1 ? "s" : ""})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Inline Actions */}
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleAbsent(t.id, t.ticket_number, t.strikes)}
+                            className="min-h-[44px] px-3.5 border border-[#E5484D] bg-[#FFFFFF] font-mono text-xs font-bold uppercase text-[#E5484D] hover:bg-[#E5484D]/10"
+                          >
+                            Absent
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleServe(t.id, t.ticket_number)}
+                            className="min-h-[44px] px-4 bg-[#111111] font-mono text-xs font-bold uppercase text-[#FBF9F5] hover:bg-neutral-800"
+                          >
+                            Call & Serve →
+                          </button>
                         </div>
                       </div>
+                    ))
+                  )}
+                </div>
+              </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleAbsent(t.id, t.ticket_number, t.strikes)}
-                          disabled={busy}
-                          className="min-h-[44px] px-3 py-2 border border-[#E5484D]/60 font-mono text-xs font-semibold uppercase text-[#E5484D] hover:bg-[#E5484D]/10 disabled:opacity-40"
-                        >
-                          Absent
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleServe(t.id, t.ticket_number)}
-                          disabled={busy}
-                          className="min-h-[44px] px-4 py-2 border border-[#111111] font-mono text-xs font-bold uppercase text-[#111111] hover:bg-[#F4F1EA] disabled:opacity-40"
-                        >
-                          Serve
-                        </button>
+              {/* Group B: Off-Premise Roam */}
+              {offPremiseRoam.length > 0 && (
+                <div className="mt-8 border-t border-[#E8E5DF] pt-6">
+                  <div className="flex items-center justify-between pb-2">
+                    <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#666666]">
+                      Off-Premise Roam ({offPremiseRoam.length} visitors)
+                    </span>
+                    <span className="font-mono text-[11px] text-[#666666]">
+                      Advised to wait outside / push alerted
+                    </span>
+                  </div>
+
+                  <div className="mt-3 divide-y divide-[#E8E5DF]">
+                    {filteredRoam.map((t, idx) => (
+                      <div
+                        key={t.id}
+                        className="flex flex-wrap items-center justify-between gap-3 py-3 font-mono text-xs opacity-75 hover:opacity-100"
+                      >
+                        <div className="flex items-center gap-4">
+                          <span className="text-[#666666] w-6">#{dynamicBuffer + idx + 1}</span>
+                          <span className="font-bold text-[#111111]">#{t.ticket_number}</span>
+                          <span className="text-[#111111]">{t.full_name}</span>
+                          {t.strikes > 0 && (
+                            <span className="text-[#E5484D] font-bold">
+                              ({t.strikes} strike{t.strikes > 1 ? "s" : ""})
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleServe(t.id, t.ticket_number)}
+                            className="min-h-[38px] px-3 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-xs font-semibold hover:border-[#111111]"
+                          >
+                            Pull Early →
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               )}
             </section>
           </div>
 
-          {/* RIGHT COLUMN: Venue Control & QR Sign */}
-          <div className={`space-y-6 ${mobileTab === "queue" ? "hidden md:block" : "block"}`}>
-            {/* Printable QR Code Poster Card */}
+          {/* RIGHT COLUMN: Venue Controls, QR Poster & Telemetry */}
+          <div className={`space-y-6 ${mobileTab === "queue" || mobileTab === "hub" ? "hidden md:block" : "block"}`}>
+            {/* Venue QR Sign Card */}
             <div className="border border-[#E8E5DF] bg-[#FFFFFF] p-6 shadow-sm">
-              <div className="flex items-baseline justify-between border-b border-[#E8E5DF] pb-3">
+              <div className="flex items-center justify-between border-b border-[#E8E5DF] pb-3">
                 <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#111111]">
-                  Intake Signage
+                  Venue QR Signage
                 </span>
-                <span className="font-mono text-[10px] text-[#30A46C] font-semibold">A4 / Poster Ready</span>
+                <button
+                  type="button"
+                  onClick={handleToggleIntake}
+                  disabled={busy}
+                  className={`font-mono text-xs font-bold uppercase px-2.5 py-1 ${
+                    open ? "border border-[#30A46C] text-[#30A46C] bg-[#30A46C]/10" : "border border-[#F76B15] text-[#F76B15] bg-[#F76B15]/10"
+                  }`}
+                >
+                  {open ? "Intake: Open" : "Intake: Paused"}
+                </button>
               </div>
 
               <div className="mt-5 border border-[#E8E5DF] bg-[#FBF9F5] p-4 text-center">
@@ -592,7 +814,7 @@ function Dashboard() {
               </div>
             </div>
 
-            {/* Queue Engine Telemetry */}
+            {/* Queue Engine Telemetry & Lease State */}
             <div className="border border-[#E8E5DF] bg-[#FFFFFF] p-6 shadow-sm">
               <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#111111]">
                 Queue Engine State
@@ -613,6 +835,10 @@ function Dashboard() {
                 <div className="flex justify-between border-b border-[#E8E5DF] pb-2">
                   <dt className="text-[#666666]">Dynamic Buffer</dt>
                   <dd className="text-[#111111] font-bold">Top {dynamicBuffer}</dd>
+                </div>
+                <div className="flex justify-between border-b border-[#E8E5DF] pb-2">
+                  <dt className="text-[#666666]">24h Inactivity Lease</dt>
+                  <dd className="text-[#111111] font-semibold">Active Renewal</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-[#666666]">Absence Limit</dt>
@@ -658,6 +884,119 @@ function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* All Queues Management Hub Modal (Desktop & Tablet) */}
+      {showHubModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#111111]/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div
+            className="w-full max-w-3xl border border-[#E8E5DF] bg-[#FFFFFF] p-6 sm:p-8 shadow-xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#E8E5DF] pb-4">
+              <div>
+                <h2 className="font-mono text-lg font-bold text-[#111111]">All Managed Queues</h2>
+                <p className="font-mono text-xs text-[#666666] mt-0.5">
+                  Overview of all queues you own or operate
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHubModal(false)}
+                className="text-[#666666] hover:text-[#111111] font-mono text-xl leading-none p-1"
+                aria-label="Close modal"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {myQueues.map((mq) => (
+                <div
+                  key={mq.queue_id}
+                  className={`border p-5 flex flex-col justify-between ${
+                    mq.queue_id === activeQueueId ? "border-[#111111] bg-[#FBF9F5]" : "border-[#E8E5DF] bg-[#FFFFFF]"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-mono text-base font-bold text-[#111111] truncate">{mq.title}</h3>
+                      <span className="font-mono text-[10px] font-bold uppercase tracking-wider border border-[#E8E5DF] px-2 py-0.5 bg-[#FFFFFF]">
+                        {mq.role}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 flex items-center gap-3 font-mono text-xs">
+                      <span className="font-bold text-[#30A46C]">{mq.waiting_count} waiting</span>
+                      <span className="text-[#666666]">|</span>
+                      <span className="text-[#111111]">{mq.serving_count} serving</span>
+                    </div>
+
+                    <p className="font-mono text-[11px] text-[#666666] mt-2">
+                      Last Active: {mq.last_activity_at ? new Date(mq.last_activity_at).toLocaleTimeString() : "Recently"}
+                    </p>
+                  </div>
+
+                  <div className="mt-6 flex flex-wrap gap-2 pt-3 border-t border-[#E8E5DF]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        switchQueue(mq.queue_id);
+                        setShowHubModal(false);
+                      }}
+                      className="flex-1 bg-[#111111] py-2 font-mono text-xs font-bold text-[#FBF9F5] uppercase tracking-wider hover:bg-neutral-800"
+                    >
+                      {mq.queue_id === activeQueueId ? "Active Console" : "Open Console"}
+                    </button>
+
+                    <Link
+                      to="/display/$queueId"
+                      params={{ queueId: mq.queue_id }}
+                      target="_blank"
+                      className="px-3 py-2 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-xs font-semibold text-[#111111] hover:bg-[#F4F1EA]"
+                    >
+                      Lobby TV ↗
+                    </Link>
+
+                    {mq.role === "ADMIN" && mq.waiting_count === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteQueue(mq.queue_id, mq.waiting_count)}
+                        className="px-3 py-2 border border-[#E5484D] text-[#E5484D] font-mono text-xs font-bold hover:bg-[#E5484D]/10"
+                        title="Delete queue (only available when empty)"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-8 flex justify-end gap-3 pt-4 border-t border-[#E8E5DF]">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHubModal(false);
+                  setIsModalOpen(true);
+                }}
+                className="bg-[#111111] px-5 py-2.5 font-mono text-xs font-bold text-[#FBF9F5] uppercase tracking-wider hover:bg-neutral-800"
+              >
+                + Deploy Another Queue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Creation Modal */}
+      <CreateQueueModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSuccess={(newId) => {
+          loadMyQueues();
+          if (newId) switchQueue(newId);
+        }}
+      />
     </main>
   );
 }

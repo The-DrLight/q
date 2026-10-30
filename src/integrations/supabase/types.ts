@@ -83,6 +83,7 @@ export type Database = {
           created_at: string | null
           expires_at: string | null
           id: string
+          last_activity_at: string | null
           owner_id: string | null
           status: string
           title: string
@@ -93,6 +94,7 @@ export type Database = {
           created_at?: string | null
           expires_at?: string | null
           id?: string
+          last_activity_at?: string | null
           owner_id?: string | null
           status?: string
           title: string
@@ -103,6 +105,7 @@ export type Database = {
           created_at?: string | null
           expires_at?: string | null
           id?: string
+          last_activity_at?: string | null
           owner_id?: string | null
           status?: string
           title?: string
