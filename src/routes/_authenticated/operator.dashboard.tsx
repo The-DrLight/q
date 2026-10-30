@@ -94,7 +94,11 @@ function Dashboard() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: qList, error } = await (supabase.rpc as any)("get_my_queues");
     if (!error && qList && Array.isArray(qList)) {
-      setMyQueues(qList as MyQueue[]);
+      const sanitized = qList.map((mq: MyQueue) => ({
+        ...mq,
+        status: mq.status || "OPEN",
+      }));
+      setMyQueues(sanitized as MyQueue[]);
 
       // Determine active queue:
       // Priority 1: URL search param
@@ -103,8 +107,8 @@ function Dashboard() {
       // Priority 4: operator's legacy queue_id
       setActiveQueueId((curr) => {
         if (searchParams.queueId) return searchParams.queueId;
-        if (curr && qList.some((q: MyQueue) => q.queue_id === curr)) return curr;
-        if (qList.length > 0 && qList[0]) return qList[0].queue_id;
+        if (curr && sanitized.some((q: MyQueue) => q.queue_id === curr)) return curr;
+        if (sanitized.length > 0 && sanitized[0]) return sanitized[0].queue_id;
         return o?.queue_id ?? null;
       });
     } else {
@@ -116,7 +120,7 @@ function Dashboard() {
             queue_id: singleQ.id,
             title: singleQ.title,
             venue_name: singleQ.venue_name,
-            status: singleQ.status,
+            status: singleQ.status || "OPEN",
             waiting_count: 0,
             serving_count: 0,
             role: o.role || "ADMIN",
@@ -163,7 +167,12 @@ function Dashboard() {
       (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: activeQueueId }),
     ]);
 
-    if (q) setQueue(q);
+    if (q) {
+      setQueue({
+        ...q,
+        status: q.status || "OPEN",
+      });
+    }
     setTickets((ts as Ticket[]) ?? []);
 
     if (ops) {
@@ -261,16 +270,77 @@ function Dashboard() {
   }
 
   async function handleToggleIntake() {
-    if (!queue || busy) return;
-    const nextStatus = queue.status === "OPEN" ? "PAUSED" : "OPEN";
+    if (!queue || busy || !activeQueueId) return;
+    const currentStatus = queue.status || "OPEN";
+    const nextStatus = currentStatus === "OPEN" ? "PAUSED" : "OPEN";
     setBusy(true);
-    const { error } = await supabase.from("queues").update({ status: nextStatus }).eq("id", queue.id);
-    setBusy(false);
-    if (error) toast.error(error.message);
-    else {
-      setQueue({ ...queue, status: nextStatus });
-      toast.success(`Queue is now ${nextStatus}`);
+
+    // Optimistically update
+    setQueue({ ...queue, status: nextStatus });
+    setMyQueues((prev) =>
+      prev.map((mq) => (mq.queue_id === activeQueueId ? { ...mq, status: nextStatus } : mq))
+    );
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase.rpc as any)("set_queue_intake_status", {
+        p_queue_id: activeQueueId,
+        p_status: nextStatus,
+      });
+
+      if (error) {
+        // Fallback to direct table update
+        const { error: directError } = await supabase
+          .from("queues")
+          .update({ status: nextStatus })
+          .eq("id", activeQueueId);
+        if (directError) throw directError;
+      }
+
+      toast.success(`Queue intake is now ${nextStatus}`);
+    } catch (err: unknown) {
+      // Revert optimistic update
+      setQueue({ ...queue, status: currentStatus });
+      setMyQueues((prev) =>
+        prev.map((mq) => (mq.queue_id === activeQueueId ? { ...mq, status: currentStatus } : mq))
+      );
+      toast.error(err instanceof Error ? err.message : "Failed to update intake status");
+    } finally {
+      setBusy(false);
       loadMyQueues();
+    }
+  }
+
+  async function handleBufferChange(newBuffer: number) {
+    if (!activeQueueId || busy) return;
+    const onlineOps = Math.max(1, operatorsList.length > 0 ? operatorsList.length : 1);
+    const formulaFloor = onlineOps * 3 + 2;
+
+    if (newBuffer < formulaFloor) return;
+    if (newBuffer > 30) return;
+
+    const previousBuffer = dynamicBuffer;
+    setDynamicBuffer(newBuffer);
+
+    try {
+      // Call RPC set_queue_buffer_override
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase.rpc as any)("set_queue_buffer_override", {
+        p_queue_id: activeQueueId,
+        p_buffer: newBuffer <= formulaFloor ? null : newBuffer,
+      });
+
+      if (error) {
+        // Fallback to direct update on queues
+        await supabase
+          .from("queues")
+          .update({ buffer_override: newBuffer <= formulaFloor ? null : newBuffer })
+          .eq("id", activeQueueId);
+      }
+      toast.success(`Staging buffer updated to Top ${newBuffer}`);
+    } catch (err) {
+      setDynamicBuffer(previousBuffer);
+      toast.error("Failed to update buffer size");
     }
   }
 
@@ -419,7 +489,9 @@ function Dashboard() {
     );
   }
 
-  const open = queue?.status === "OPEN";
+  const onlineOps = Math.max(1, operatorsList.length > 0 ? operatorsList.length : 1);
+  const formulaFloor = onlineOps * 3 + 2;
+  const open = (queue?.status || "OPEN") === "OPEN";
 
   return (
     <main className="min-h-screen bg-[#FBF9F5] text-[#111111]">
@@ -843,23 +915,72 @@ function Dashboard() {
               <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#111111]">
                 Queue Engine State
               </span>
-              <dl className="mt-4 space-y-3 font-mono text-xs">
-                <div className="flex justify-between border-b border-[#E8E5DF] pb-2">
-                  <dt className="text-[#666666]">Intake Status</dt>
-                  <dd className={open ? "text-[#30A46C] font-bold" : "text-[#F76B15] font-bold"}>
-                    {open ? "OPEN" : "PAUSED"}
-                  </dd>
+              <dl className="mt-4 space-y-4 font-mono text-xs">
+                {/* Intake Status Row with Interactive Toggle */}
+                <div className="flex items-center justify-between border-b border-[#E8E5DF] pb-3">
+                  <div>
+                    <dt className="text-[#666666]">Intake Status</dt>
+                    <dd className="mt-1 flex items-center gap-1.5">
+                      <span className={`h-2 w-2 rounded-full ${open ? "bg-[#30A46C] animate-pulse" : "bg-[#F76B15]"}`} />
+                      <span className={open ? "text-[#30A46C] font-bold" : "text-[#F76B15] font-bold"}>
+                        {open ? "● OPEN" : "⏸ PAUSED"}
+                      </span>
+                    </dd>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleIntake}
+                    disabled={busy}
+                    className={`min-h-[36px] px-3 font-mono text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-40 ${
+                      open
+                        ? "border border-[#F76B15] bg-[#F76B15]/10 text-[#F76B15] hover:bg-[#F76B15]/20"
+                        : "bg-[#111111] text-[#FBF9F5] hover:bg-neutral-800"
+                    }`}
+                  >
+                    {open ? "Pause Intake" : "Resume Intake"}
+                  </button>
                 </div>
-                <div className="flex justify-between border-b border-[#E8E5DF] pb-2">
+
+                <div className="flex justify-between border-b border-[#E8E5DF] pb-3">
                   <dt className="text-[#666666]">Active Operators</dt>
                   <dd className="text-[#111111] font-bold">
-                    {Math.max(1, Math.round((dynamicBuffer - 2) / 3))} Online
+                    {onlineOps} Online
                   </dd>
                 </div>
-                <div className="flex justify-between border-b border-[#E8E5DF] pb-2">
-                  <dt className="text-[#666666]">Dynamic Buffer</dt>
-                  <dd className="text-[#111111] font-bold">Top {dynamicBuffer}</dd>
+
+                {/* Dynamic Buffer Interactive Stepper */}
+                <div className="border-b border-[#E8E5DF] pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <dt className="text-[#666666]">Dynamic Staging Buffer</dt>
+                      <dd className="mt-1 text-base font-bold text-[#111111]">Top {dynamicBuffer}</dd>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleBufferChange(dynamicBuffer - 1)}
+                        disabled={busy || dynamicBuffer <= formulaFloor}
+                        className="h-8 w-8 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-sm font-bold text-[#111111] hover:bg-[#F4F1EA] disabled:opacity-30 disabled:hover:bg-[#FFFFFF]"
+                        title={dynamicBuffer <= formulaFloor ? `Locked at formula floor (${formulaFloor})` : "Decrease buffer"}
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleBufferChange(dynamicBuffer + 1)}
+                        disabled={busy || dynamicBuffer >= 30}
+                        className="h-8 w-8 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-sm font-bold text-[#111111] hover:bg-[#F4F1EA] disabled:opacity-30 disabled:hover:bg-[#FFFFFF]"
+                        title="Increase buffer (up to 30)"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-[#666666] leading-tight">
+                    Floor: Top {formulaFloor} (Operators × 3 + 2). Scaling up is allowed; dropping below the floor is locked.
+                  </p>
                 </div>
+
                 <div className="flex justify-between border-b border-[#E8E5DF] pb-2">
                   <dt className="text-[#666666]">24h Inactivity Lease</dt>
                   <dd className="text-[#111111] font-semibold">Active Renewal</dd>

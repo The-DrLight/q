@@ -80,6 +80,7 @@ export type Database = {
       }
       queues: {
         Row: {
+          buffer_override: number | null
           created_at: string | null
           expires_at: string | null
           id: string
@@ -91,6 +92,7 @@ export type Database = {
           version: number
         }
         Insert: {
+          buffer_override?: number | null
           created_at?: string | null
           expires_at?: string | null
           id?: string
@@ -102,6 +104,7 @@ export type Database = {
           version?: number
         }
         Update: {
+          buffer_override?: number | null
           created_at?: string | null
           expires_at?: string | null
           id?: string

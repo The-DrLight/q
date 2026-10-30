@@ -144,10 +144,16 @@ function JoinPage() {
                 open ? "border-success text-success" : "border-warning text-warning"
               }`}
             >
-              {open ? "● Queue Open" : queue.status === "PAUSED" ? "○ Queue Paused" : "○ Queue Closed"}
+              {open ? "● Queue Open" : queue.status === "PAUSED" ? "⏸ Queue Paused" : "○ Queue Closed"}
             </span>
           )}
         </header>
+
+        {!open && queue && (
+          <div className="mt-6 border border-warning/40 bg-warning/10 p-4 font-mono text-xs text-warning">
+            Intake is temporarily paused by operators. Please check back shortly.
+          </div>
+        )}
 
         <form onSubmit={submit} className="flex flex-1 flex-col pt-10">
           <label className="eyebrow" htmlFor="name">
