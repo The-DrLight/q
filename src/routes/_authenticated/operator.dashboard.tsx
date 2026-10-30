@@ -298,22 +298,46 @@ function Dashboard() {
     }
   }
 
-  async function handleDeleteQueue(qId: string, waitingCount: number) {
-    if (waitingCount > 0) {
-      toast.error("Cannot delete a queue with active waiting tickets.");
+  async function handleDeleteQueue(queueId: string) {
+    if (!confirm("Are you sure you want to delete this queue? All active and historical tickets will be removed.")) {
       return;
     }
-    if (!confirm("Are you sure you want to permanently delete this queue?")) return;
 
-    const { error } = await supabase.from("queues").delete().eq("id", qId);
-    if (error) {
-      toast.error(error.message);
-    } else {
-      toast.success("Queue deleted successfully.");
-      loadMyQueues();
-      if (activeQueueId === qId) {
-        setActiveQueueId(null);
+    try {
+      // Call the dedicated delete_queue RPC
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase.rpc as any)("delete_queue", {
+        p_queue_id: queueId,
+      });
+
+      if (error) {
+        // Fallback to direct delete if RPC not yet picked up
+        const { error: directError } = await supabase
+          .from("queues")
+          .delete()
+          .eq("id", queueId);
+        if (directError) throw directError;
       }
+
+      toast.success("Queue deleted successfully.");
+
+      // Update local state: remove from managed queues list
+      setMyQueues((prev) => prev.filter((q) => q.queue_id !== queueId));
+
+      // If deleted queue was the currently active console queue, switch to another or clear
+      if (activeQueueId === queueId) {
+        const remaining = myQueues.filter((q) => q.queue_id !== queueId);
+        if (remaining.length > 0 && remaining[0]) {
+          switchQueue(remaining[0].queue_id);
+        } else {
+          setActiveQueueId(null);
+        }
+      }
+
+      loadMyQueues();
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to delete queue";
+      toast.error(errorMsg);
     }
   }
 
@@ -543,10 +567,10 @@ function Dashboard() {
                     >
                       Open
                     </button>
-                    {mq.role === "ADMIN" && mq.waiting_count === 0 && (
+                    {mq.role === "ADMIN" && (
                       <button
                         type="button"
-                        onClick={() => handleDeleteQueue(mq.queue_id, mq.waiting_count)}
+                        onClick={() => handleDeleteQueue(mq.queue_id)}
                         className="px-3 border border-[#E5484D] text-[#E5484D] font-mono text-xs font-bold"
                       >
                         Delete
@@ -957,12 +981,12 @@ function Dashboard() {
                       Lobby TV ↗
                     </Link>
 
-                    {mq.role === "ADMIN" && mq.waiting_count === 0 && (
+                    {mq.role === "ADMIN" && (
                       <button
                         type="button"
-                        onClick={() => handleDeleteQueue(mq.queue_id, mq.waiting_count)}
+                        onClick={() => handleDeleteQueue(mq.queue_id)}
                         className="px-3 py-2 border border-[#E5484D] text-[#E5484D] font-mono text-xs font-bold hover:bg-[#E5484D]/10"
-                        title="Delete queue (only available when empty)"
+                        title="Delete queue"
                       >
                         Delete
                       </button>
