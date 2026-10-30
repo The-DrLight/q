@@ -162,7 +162,7 @@ describe("3. Absence Penalty & Strike Engine with Dynamic Buffer (PRD 2.3)", () 
     expect(dynamicBuffer).toBe(5);
 
     // Initial waiting tickets are sorted 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0...
-    const ticket1 = engine.tickets[0];
+    const ticket1 = engine.tickets[0]!;
     expect(ticket1.ticket_number).toBe(1);
 
     // Strike 1: Bump behind 5-person physical buffer (between index 5 and 6, or sort_orders 6.0 and 7.0)
@@ -180,8 +180,8 @@ describe("3. Absence Penalty & Strike Engine with Dynamic Buffer (PRD 2.3)", () 
       .filter((t) => t.status === "WAITING")
       .sort((a, b) => a.sort_order - b.sort_order);
 
-    expect(sortedWaiting[5].id).toBe(ticket1.id);
-    expect(sortedWaiting[0].ticket_number).toBe(2); // Former Position 2 is now Position 1
+    expect(sortedWaiting[5]!.id).toBe(ticket1.id);
+    expect(sortedWaiting[0]!.ticket_number).toBe(2); // Former Position 2 is now Position 1
 
     // Strike 2: Second absence
     engine.clerkMarkTicketAbsent(ticket1.id);
@@ -236,14 +236,14 @@ describe("4. Shared Hopper Concurrency & Atomic Claim (PRD 3.1)", () => {
     // Clerk A claims Ticket #101
     const resA = hopper.clerkServeTicket("t1", clerkA);
     expect(resA.ok).toBe(true);
-    expect(hopper.tickets[0].serving_operator_id).toBe(clerkA);
-    expect(hopper.tickets[0].status).toBe("SERVING");
+    expect(hopper.tickets[0]!.serving_operator_id).toBe(clerkA);
+    expect(hopper.tickets[0]!.status).toBe("SERVING");
 
     // Clerk B simultaneously attempts to claim Ticket #101
     const resB = hopper.clerkServeTicket("t1", clerkB);
     expect(resB.ok).toBe(false);
     expect(resB.error).toContain("Ticket is not waiting to be served");
-    expect(hopper.tickets[0].serving_operator_id).toBe(clerkA); // still owned by Clerk A
+    expect(hopper.tickets[0]!.serving_operator_id).toBe(clerkA); // still owned by Clerk A
   });
 });
 

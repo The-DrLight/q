@@ -14,6 +14,35 @@ export type Database = {
   }
   public: {
     Tables: {
+      operator_invitations: {
+        Row: {
+          created_at: string | null
+          email: string
+          id: string
+          queue_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          email: string
+          id?: string
+          queue_id: string
+        }
+        Update: {
+          created_at?: string | null
+          email?: string
+          id?: string
+          queue_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "operator_invitations_queue_id_fkey"
+            columns: ["queue_id"]
+            isOneToOne: false
+            referencedRelation: "queues"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       operators: {
         Row: {
           counter_name: string
@@ -52,7 +81,9 @@ export type Database = {
       queues: {
         Row: {
           created_at: string | null
+          expires_at: string | null
           id: string
+          owner_id: string | null
           status: string
           title: string
           venue_name: string
@@ -60,7 +91,9 @@ export type Database = {
         }
         Insert: {
           created_at?: string | null
+          expires_at?: string | null
           id?: string
+          owner_id?: string | null
           status?: string
           title: string
           venue_name: string
@@ -68,7 +101,9 @@ export type Database = {
         }
         Update: {
           created_at?: string | null
+          expires_at?: string | null
           id?: string
+          owner_id?: string | null
           status?: string
           title?: string
           venue_name?: string
