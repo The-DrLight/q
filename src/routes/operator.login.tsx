@@ -1,8 +1,13 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/operator/login")({
+  validateSearch: (search: Record<string, unknown>): { mode?: string | undefined } => {
+    return {
+      mode: typeof search["mode"] === "string" ? search["mode"] : undefined,
+    };
+  },
   head: () => ({
     meta: [
       { title: "Operator Sign In — Q" },
@@ -18,12 +23,19 @@ export const Route = createFileRoute("/operator/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const searchParams = Route.useSearch();
+  const [mode, setMode] = useState<"in" | "up">(searchParams.mode === "signup" ? "up" : "in");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    if (searchParams.mode === "signup") {
+      setMode("up");
+    }
+  }, [searchParams.mode]);
 
   async function fulfillPendingQueue() {
     const raw = sessionStorage.getItem("q_pending_queue");
@@ -89,20 +101,55 @@ function LoginPage() {
   return (
     <main className="min-h-screen bg-[#FBF9F5] text-[#111111] flex flex-col justify-between">
       {/* Mini Header */}
-      <header className="border-b border-[#E8E5DF] px-6 py-4 md:px-12">
+      <header className="border-b border-[#E8E5DF] px-6 py-4 md:px-12 bg-[#FBF9F5]">
         <Link to="/" className="inline-flex items-center gap-3">
           <span className="font-mono text-2xl font-black tracking-tighter text-[#111111]">Q</span>
-          <span className="font-mono text-xs uppercase tracking-wider text-[#666666]">Virtual Queue</span>
+          <div className="h-4 w-px bg-[#E8E5DF]" />
+          <span className="font-mono text-xs uppercase tracking-wider text-[#666666]">
+            Virtual Queue Engine
+          </span>
         </Link>
       </header>
 
       {/* Main Auth Card */}
       <div className="mx-auto w-full max-w-md px-6 py-12">
         <div className="border border-[#E8E5DF] bg-[#FFFFFF] p-8 md:p-10 shadow-sm">
+          {/* Mode Switcher Tabs */}
+          <div className="grid grid-cols-2 border-b border-[#E8E5DF] pb-4 mb-6">
+            <button
+              type="button"
+              onClick={() => {
+                setMode("in");
+                setMsg(null);
+              }}
+              className={`font-mono text-xs font-bold uppercase pb-2 border-b-2 transition-colors ${
+                mode === "in"
+                  ? "border-[#111111] text-[#111111]"
+                  : "border-transparent text-[#666666] hover:text-[#111111]"
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("up");
+                setMsg(null);
+              }}
+              className={`font-mono text-xs font-bold uppercase pb-2 border-b-2 transition-colors ${
+                mode === "up"
+                  ? "border-[#111111] text-[#111111]"
+                  : "border-transparent text-[#666666] hover:text-[#111111]"
+              }`}
+            >
+              Create Account
+            </button>
+          </div>
+
           <span className="font-mono text-xs font-bold uppercase tracking-widest text-[#666666]">
             Desk Operator Authentication
           </span>
-          <h1 className="mt-2 font-mono text-2xl font-bold tracking-tight text-[#111111]">
+          <h1 className="mt-1 font-mono text-2xl font-bold tracking-tight text-[#111111]">
             {mode === "in" ? "Sign in to console" : "Create operator profile"}
           </h1>
 
@@ -114,10 +161,11 @@ function LoginPage() {
                 </label>
                 <input
                   id="fullName"
+                  name="fullName"
                   type="text"
                   required
                   autoFocus
-                  placeholder="Official Funke"
+                  placeholder="e.g. Funke Adebayo"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   className={field}
@@ -127,14 +175,14 @@ function LoginPage() {
 
             <div>
               <label className="block font-mono text-xs font-semibold uppercase text-[#111111]" htmlFor="email">
-                Official Email <span className="text-[#E5484D]">*</span>
+                Email Address <span className="text-[#E5484D]">*</span>
               </label>
               <input
                 id="email"
                 type="email"
                 required
                 autoFocus={mode === "in"}
-                placeholder="operator@venue.org"
+                placeholder="name@organization.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className={field}
@@ -142,15 +190,15 @@ function LoginPage() {
             </div>
 
             <div>
-              <label className="block font-mono text-xs font-semibold uppercase text-[#111111]" htmlFor="pw">
+              <label className="block font-mono text-xs font-semibold uppercase text-[#111111]" htmlFor="password">
                 Password <span className="text-[#E5484D]">*</span>
               </label>
               <input
-                id="pw"
+                id="password"
                 type="password"
                 required
                 minLength={8}
-                placeholder="Min 8 characters"
+                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={field}
@@ -187,7 +235,7 @@ function LoginPage() {
               }}
               className="font-mono text-xs text-[#666666] hover:text-[#111111]"
             >
-              {mode === "in" ? "New operator? Register account" : "Existing operator? Sign in"}
+              {mode === "in" ? "Need an account? Register operator profile" : "Already have an account? Sign in"}
             </button>
           </div>
         </div>

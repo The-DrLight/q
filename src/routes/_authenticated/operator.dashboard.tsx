@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { LivePulse } from "@/components/LivePulse";
+import { CreateQueueModal } from "@/components/CreateQueueModal";
 import { DEFAULT_BUFFER_SIZE, MAX_STRIKES, formatWait } from "@/lib/q";
 import { downloadVenuePoster } from "@/lib/poster-generator";
 
@@ -50,6 +51,7 @@ function Dashboard() {
   const [mobileTab, setMobileTab] = useState<"queue" | "qr">("queue");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     const i = setInterval(() => setNow(Date.now()), 1000);
@@ -224,19 +226,19 @@ function Dashboard() {
           <div className="mx-auto flex h-16 w-16 items-center justify-center border border-[#E8E5DF] bg-[#FBF9F5]">
             <span className="font-mono text-2xl font-bold text-[#111111]">Q</span>
           </div>
-          <h1 className="mt-6 font-mono text-2xl font-bold text-[#111111]">No Active Queue Instance</h1>
+          <h1 className="mt-6 font-mono text-2xl font-bold text-[#111111]">Welcome to Q Console</h1>
           <p className="mt-3 text-sm text-[#666666] leading-relaxed max-w-md mx-auto">
-            You are logged in as <span className="font-mono text-[#111111]">{op?.email}</span>, but your account is
-            not currently assigned to an active desk queue.
+            You do not have an active queue right now. Deploy a new queue to get a live QR code and start calling visitors.
           </p>
 
           <div className="mt-8 flex flex-wrap justify-center gap-4">
-            <Link
-              to="/"
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
               className="inline-flex min-h-[44px] items-center bg-[#111111] px-6 font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] transition-colors hover:bg-neutral-800"
             >
-              Create Your First Queue →
-            </Link>
+              + Create Your First Queue
+            </button>
             <button
               onClick={signOut}
               className="inline-flex min-h-[44px] items-center border border-[#E8E5DF] bg-[#FFFFFF] px-6 font-mono text-xs font-semibold text-[#666666] hover:text-[#111111]"
@@ -245,6 +247,14 @@ function Dashboard() {
             </button>
           </div>
         </div>
+
+        <CreateQueueModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSuccess={() => {
+            window.location.reload();
+          }}
+        />
       </main>
     );
   }
