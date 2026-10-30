@@ -6,9 +6,10 @@ import QRCode from "qrcode";
  */
 export async function downloadVenuePoster(venueTitle: string, queueUrl: string) {
   if (typeof window === "undefined") return;
+  const cleanUrl = queueUrl.trim().replace(/\/+$/, "");
 
   // 1. Generate high-resolution QR data URL
-  const qrDataUrl = await QRCode.toDataURL(queueUrl, {
+  const qrDataUrl = await QRCode.toDataURL(cleanUrl, {
     margin: 1,
     width: 900,
     color: {
@@ -98,7 +99,7 @@ export async function downloadVenuePoster(venueTitle: string, queueUrl: string) 
   // Footer URL
   ctx.font = "bold 18px 'Geist Mono', monospace";
   ctx.fillStyle = "#888888";
-  ctx.fillText(queueUrl, canvas.width / 2, 1530);
+  ctx.fillText(cleanUrl, canvas.width / 2, 1530);
 
   ctx.font = "14px 'Geist Mono', monospace";
   ctx.fillStyle = "#AAAAAA";

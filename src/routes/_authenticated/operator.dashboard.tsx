@@ -149,7 +149,9 @@ function Dashboard() {
     });
   };
 
-  const joinUrl = activeQueueId ? `https://queue-engine.vercel.app/join/${activeQueueId}` : "";
+  // Sanitize activeQueueId so we never construct undefined/null URLs
+  const cleanQueueId = activeQueueId && activeQueueId !== "undefined" && activeQueueId !== "null" ? activeQueueId.trim() : null;
+  const joinUrl = cleanQueueId ? `https://queue-engine.vercel.app/join/${cleanQueueId}` : "";
 
   // Load active queue data (tickets, operators, dynamic buffer)
   const load = useCallback(async () => {
@@ -895,8 +897,9 @@ function Dashboard() {
               <div className="mt-5 space-y-3">
                 <button
                   type="button"
-                  onClick={() => queue && downloadVenuePoster(queue.title, joinUrl)}
-                  className="min-h-[44px] w-full bg-[#111111] font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] transition-colors hover:bg-neutral-800"
+                  disabled={!cleanQueueId || !queue}
+                  onClick={() => queue && cleanQueueId && downloadVenuePoster(queue.title, joinUrl)}
+                  className="min-h-[44px] w-full bg-[#111111] font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] transition-colors hover:bg-neutral-800 disabled:opacity-40"
                 >
                   Download Printable Sign (PNG)
                 </button>

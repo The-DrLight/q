@@ -67,21 +67,72 @@ function JoinPage() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    const existing = getActiveTicket(queueId);
+    if (!queueId) {
+      setLoadErr(true);
+      return;
+    }
+
+    const cleanId = queueId.trim();
+
+    const existing = getActiveTicket(cleanId);
     if (existing) {
       supabase.rpc("get_ticket_status", { p_ticket_id: existing }).then(({ data }) => {
         const t = data?.[0];
         if (t && (t.status === "WAITING" || t.status === "SERVING")) {
           navigate({ to: "/ticket/$ticketId", params: { ticketId: existing }, replace: true });
-        } else clearActiveTicket(queueId);
+        } else clearActiveTicket(cleanId);
       });
     }
-    supabase
-      .from("queues")
-      .select("id,venue_name,title,status")
-      .eq("id", queueId)
-      .maybeSingle()
-      .then(({ data }) => (data ? setQueue(data) : setLoadErr(true)));
+
+    async function fetchQueue() {
+      // 1. Attempt direct select from public.queues
+      const { data, error } = await supabase
+        .from("queues")
+        .select("id,venue_name,title,status")
+        .eq("id", cleanId)
+        .maybeSingle();
+
+      if (data) {
+        setQueue({
+          ...data,
+          status: data.status || "OPEN",
+        });
+        return;
+      }
+
+      console.error("Join queue direct fetch error/empty:", error, "queueId:", cleanId);
+
+      // 2. Fallback to RPC get_queue_for_visitor
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: rpcData, error: rpcError } = await (supabase.rpc as any)(
+          "get_queue_for_visitor",
+          { p_queue_id: cleanId }
+        );
+
+        if (rpcData && Array.isArray(rpcData) && rpcData.length > 0) {
+          const q = rpcData[0];
+          setQueue({
+            id: q.id,
+            venue_name: q.venue_name || q.title,
+            title: q.title,
+            status: q.status || "OPEN",
+          });
+          return;
+        }
+
+        if (rpcError) {
+          console.error("Join queue RPC fetch error:", rpcError, "queueId:", cleanId);
+        }
+      } catch (err) {
+        console.error("RPC fallback exception:", err);
+      }
+
+      setLoadErr(true);
+    }
+
+    fetchQueue();
+
     if (typeof Notification !== "undefined") setAlerts(Notification.permission === "granted");
   }, [queueId, navigate]);
 
