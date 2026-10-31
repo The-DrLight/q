@@ -166,19 +166,42 @@ function JoinPage() {
     setBusy(true);
     setErr(null);
 
-    const subscriptionPayload = pushSubscription ? JSON.parse(JSON.stringify(pushSubscription)) : null;
+    // 1. Synchronous Client Identification
+    let clientUuid = localStorage.getItem("q_client_uuid");
+    if (!clientUuid) {
+      clientUuid = crypto.randomUUID();
+      localStorage.setItem("q_client_uuid", clientUuid);
+    }
 
+    const cleanQueueId = queueId.trim();
+
+    // 2. Immediate, Non-Blocking Submission (pass null push_subscription)
     const { data, error } = await supabase.rpc("join_queue", {
-      p_queue_id: queueId,
+      p_queue_id: cleanQueueId,
       p_full_name: name.trim().slice(0, 80),
       p_phone_number: phone.trim().slice(0, 30),
-      p_client_uuid: getClientUuid(),
-      p_push_subscription: subscriptionPayload,
+      p_client_uuid: clientUuid,
+      p_push_subscription: null,
     });
-    setBusy(false);
-    if (error || !data) return setErr(error?.message ?? "Could not join the line.");
-    setActiveTicket(queueId, data);
+
+    if (error || !data) {
+      setBusy(false);
+      return setErr(error?.message ?? "Could not join the line.");
+    }
+
+    // 3. Instant Navigation
+    setActiveTicket(cleanQueueId, data);
     navigate({ to: "/ticket/$ticketId", params: { ticketId: data } });
+
+    // Optional background push subscription if user toggled alerts
+    if (alerts && pushSubscription) {
+      Promise.resolve(
+        supabase
+          .from("tickets")
+          .update({ push_subscription: JSON.parse(JSON.stringify(pushSubscription)) })
+          .eq("id", data)
+      ).catch(() => {});
+    }
   }
 
   const open = queue?.status === "OPEN";

@@ -63,20 +63,92 @@ function TicketPage() {
   const prev = useRef<Status | null>(null);
 
   const load = useCallback(async () => {
-    const { data, error } = await supabase.rpc("get_ticket_status", { p_ticket_id: ticketId });
-    if (error) return;
-    const row = (data?.[0] as Status | undefined) ?? null;
-    if (!row) return setMissing(true);
+    const cleanTicketId = ticketId.trim();
+
+    // 1. Wrap RPC in a 3.5s timeout promise
+    let row: Status | null = null;
+    try {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Request timed out")), 3500)
+      );
+      const query = supabase.rpc("get_ticket_status", { p_ticket_id: cleanTicketId });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await Promise.race([query, timeout]);
+      if (res?.data && res.data[0]) {
+        row = res.data[0] as Status;
+      }
+    } catch (rpcErr) {
+      console.warn("get_ticket_status RPC timed out or failed; falling back to direct select:", rpcErr);
+    }
+
+    // 2. Direct fallback query if RPC failed, timed out, or returned null
+    if (!row) {
+      const { data: directTicket, error: directError } = await supabase
+        .from("tickets")
+        .select(`
+          id,
+          queue_id,
+          ticket_number,
+          full_name,
+          status,
+          strikes,
+          serving_operator_id
+        `)
+        .eq("id", cleanTicketId)
+        .maybeSingle();
+
+      if (directError || !directTicket) {
+        setMissing(true);
+        return;
+      }
+
+      // Fetch queue title and venue name
+      const { data: queueData } = await supabase
+        .from("queues")
+        .select("title, venue_name, status")
+        .eq("id", directTicket.queue_id)
+        .maybeSingle();
+
+      // Estimate position if WAITING
+      let queuePosition: number | null = null;
+      if (directTicket.status === "WAITING") {
+        const { count } = await supabase
+          .from("tickets")
+          .select("id", { count: "exact", head: true })
+          .eq("queue_id", directTicket.queue_id)
+          .eq("status", "WAITING")
+          .lte("sort_order", 999999);
+        queuePosition = count ?? 1;
+      }
+
+      row = {
+        id: directTicket.id,
+        queue_id: directTicket.queue_id,
+        ticket_number: directTicket.ticket_number,
+        full_name: directTicket.full_name,
+        status: directTicket.status,
+        strikes: directTicket.strikes,
+        queue_position: queuePosition,
+        venue_name: queueData?.venue_name || queueData?.title || "Venue",
+        title: queueData?.title || "Virtual Queue",
+        queue_status: queueData?.status || "OPEN",
+        counter_name: null,
+      };
+    }
+
     setT(row);
 
-    // Fetch dynamic buffer size
+    // Fetch dynamic buffer size non-blockingly
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: bufSize } = await (supabase.rpc as any)("get_dynamic_buffer_size", {
+    (supabase.rpc as any)("get_dynamic_buffer_size", {
       p_queue_id: row.queue_id,
-    });
-    if (typeof bufSize === "number") {
-      setDynamicBuffer(bufSize);
-    }
+    })
+      .then(({ data: bufSize }: { data: unknown }) => {
+        if (typeof bufSize === "number") {
+          setDynamicBuffer(bufSize);
+        }
+      })
+      .catch(() => {});
   }, [ticketId]);
 
   // Network offline/online indicator
@@ -95,12 +167,12 @@ function TicketPage() {
     };
   }, [load]);
 
-  // initial + background-wake resync + slow fallback poll
+  // initial + background-wake resync + 5-second polling fallback
   useEffect(() => {
     load();
     const onVis = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVis);
-    const poll = setInterval(load, 30000);
+    const poll = setInterval(load, 5000);
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       clearInterval(poll);
