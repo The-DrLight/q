@@ -92,6 +92,7 @@ function TicketPage() {
           full_name,
           status,
           strikes,
+          sort_order,
           serving_operator_id
         `)
         .eq("id", cleanTicketId)
@@ -109,7 +110,7 @@ function TicketPage() {
         .eq("id", directTicket.queue_id)
         .maybeSingle();
 
-      // Estimate position if WAITING
+      // Recalculate dynamic position: count how many WAITING tickets are ahead in sort_order
       let queuePosition: number | null = null;
       if (directTicket.status === "WAITING") {
         const { count } = await supabase
@@ -117,8 +118,8 @@ function TicketPage() {
           .select("id", { count: "exact", head: true })
           .eq("queue_id", directTicket.queue_id)
           .eq("status", "WAITING")
-          .lte("sort_order", 999999);
-        queuePosition = count ?? 1;
+          .lt("sort_order", (directTicket as any).sort_order ?? 999999);
+        queuePosition = (count ?? 0) + 1;
       }
 
       row = {
@@ -262,14 +263,14 @@ function TicketPage() {
   return (
     <Shell venue={`${t.venue_name} · ${t.title}`} pulse={<LivePulse tone={tone} />} isOnline={isOnline}>
       <div className="flex items-baseline justify-between border-b border-[#262626] pb-4">
-        <span className="font-mono text-xs uppercase tracking-wider text-neutral-400">Verified Ticket</span>
-        <span className="font-mono text-base font-bold text-[#FBF9F5]">#{String(t.ticket_number).padStart(3, "0")}</span>
+        <span className="font-mono text-xs uppercase tracking-wider text-neutral-400">Your Ticket</span>
+        <span className="font-mono text-xl font-black text-[#FBF9F5]">#{t.ticket_number}</span>
       </div>
 
       {t.status === "WAITING" && pos != null && (
         <div className="my-8">
-          <p className="font-mono text-xs uppercase tracking-widest text-neutral-400">Current Position</p>
-          <p className="font-mono mt-2 text-[7.5rem] font-bold leading-none tracking-tight text-[#FBF9F5]">#{pos}</p>
+          <p className="font-mono text-xs uppercase tracking-widest text-neutral-400">Position in Line</p>
+          <p className="font-mono mt-2 text-[7.5rem] font-bold leading-none tracking-tight text-[#FBF9F5]">{pos}</p>
           <p className="mt-4 font-mono text-base text-neutral-400">
             {pos === 1 ? "You're next at the counter." : `${pos - 1} ${pos - 1 === 1 ? "person" : "people"} ahead of you`}
           </p>

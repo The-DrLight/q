@@ -284,6 +284,44 @@ function Dashboard() {
   }, [activeQueueId, joinUrl]);
 
   // Operator Actions
+  const markDone = async (ticketId: string, ticketNumber?: number) => {
+    try {
+      // Optimistically update local tickets state immediately for instant UI
+      setTickets((prev) => prev.filter((t) => t.id !== ticketId));
+
+      // 1. Try dedicated mark_ticket_done RPC first
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: rpcErr } = await (supabase.rpc as any)("mark_ticket_done", {
+        p_ticket_id: ticketId,
+      });
+
+      if (rpcErr) {
+        // 2. Direct table update fallback (only updating status and updated_at)
+        const { error: directErr } = await supabase
+          .from("tickets")
+          .update({
+            status: "COMPLETED",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", ticketId);
+
+        if (directErr) {
+          console.error("Failed to mark ticket done:", directErr);
+          toast.error("Failed to mark ticket done");
+          load();
+          return;
+        }
+      }
+
+      toast.success(ticketNumber ? `#${ticketNumber} completed` : "Ticket completed");
+      await loadMyQueues();
+    } catch (err) {
+      console.error("Error marking done:", err);
+      toast.error("Error completing ticket");
+      load();
+    }
+  };
+
   async function handleServe(ticketId: string, ticketNumber: number) {
     if (busy || !op) return;
     setBusy(true);
@@ -300,18 +338,7 @@ function Dashboard() {
   }
 
   async function handleComplete(ticketId: string, ticketNumber: number) {
-    if (busy || !op) return;
-    setBusy(true);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase.rpc as any)("clerk_complete_ticket", {
-      p_ticket_id: ticketId,
-      p_operator_id: op.id,
-    });
-    setBusy(false);
-    if (error) toast.error(error.message);
-    else toast.success(`#${ticketNumber} completed`);
-    load();
-    loadMyQueues();
+    await markDone(ticketId, ticketNumber);
   }
 
   async function handleAbsent(ticketId: string, ticketNumber: number, currentStrikes: number) {
@@ -848,16 +875,21 @@ function Dashboard() {
                         className="flex flex-wrap items-center justify-between gap-3 py-3.5 transition-colors hover:bg-[#FBF9F5]/70"
                       >
                         <div className="flex items-center gap-4">
-                          <span className="font-mono text-xs text-[#666666] w-6">#{idx + 1}</span>
-                          <span className="font-mono text-xl font-black text-[#111111]">
+                          {/* Live Position Badge */}
+                          <span className="text-xs font-mono font-bold px-2 py-1 bg-neutral-100 rounded text-neutral-600">
+                            Pos {idx + 1}
+                          </span>
+                          {/* Permanent Ticket Number */}
+                          <span className="text-xl font-mono font-black text-black">
                             #{t.ticket_number}
                           </span>
+                          {/* Visitor Details */}
                           <div>
-                            <span className="font-mono text-sm font-semibold text-[#111111]">{t.full_name}</span>
-                            <div className="flex items-center gap-2 font-mono text-xs text-[#666666]">
+                            <div className="font-bold text-sm text-neutral-900">{t.full_name}</div>
+                            <div className="text-xs text-neutral-500 font-mono flex items-center gap-2">
                               <span>{formatWait(t.created_at, now)}</span>
                               {t.strikes > 0 && (
-                                <span className="text-[#E5484D] font-bold">
+                                <span className="text-red-500 font-bold">
                                   ({t.strikes} strike{t.strikes > 1 ? "s" : ""})
                                 </span>
                               )}
@@ -878,10 +910,10 @@ function Dashboard() {
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => handleServe(t.id, t.ticket_number)}
-                            className="min-h-[44px] px-4 bg-[#111111] font-mono text-xs font-bold uppercase text-[#FBF9F5] hover:bg-neutral-800"
+                            onClick={() => markDone(t.id, t.ticket_number)}
+                            className="min-h-[44px] px-5 bg-black font-mono text-xs font-bold uppercase text-[#FBF9F5] hover:bg-neutral-800 transition-colors"
                           >
-                            Call & Serve →
+                            DONE
                           </button>
                         </div>
                       </div>
@@ -909,7 +941,11 @@ function Dashboard() {
                         className="flex flex-wrap items-center justify-between gap-3 py-3 font-mono text-xs opacity-75 hover:opacity-100"
                       >
                         <div className="flex items-center gap-4">
-                          <span className="text-[#666666] w-6">#{dynamicBuffer + idx + 1}</span>
+                          {/* Live Position Badge */}
+                          <span className="text-xs font-mono font-bold px-2 py-1 bg-neutral-100 rounded text-neutral-600">
+                            Pos {dynamicBuffer + idx + 1}
+                          </span>
+                          {/* Permanent Ticket Number */}
                           <span className="font-bold text-[#111111]">#{t.ticket_number}</span>
                           <span className="text-[#111111]">{t.full_name}</span>
                           {t.strikes > 0 && (
@@ -922,10 +958,10 @@ function Dashboard() {
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => handleServe(t.id, t.ticket_number)}
-                            className="min-h-[38px] px-3 border border-[#E8E5DF] bg-[#FFFFFF] font-mono text-xs font-semibold hover:border-[#111111]"
+                            onClick={() => markDone(t.id, t.ticket_number)}
+                            className="min-h-[38px] px-3 bg-black font-mono text-xs font-bold uppercase text-[#FBF9F5] hover:bg-neutral-800 transition-colors"
                           >
-                            Pull Early →
+                            DONE
                           </button>
                         </div>
                       </div>
