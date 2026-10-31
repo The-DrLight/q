@@ -222,7 +222,30 @@ function TicketPage() {
   if (missing)
     return (
       <Shell venue="Q" isOnline={isOnline}>
-        <p className="text-2xl font-semibold">Ticket not found.</p>
+        <div className="py-8 text-center space-y-4">
+          <p className="font-mono text-xl font-bold text-[#111111] dark:text-[#FBF9F5]">Ticket not found</p>
+          <p className="text-sm text-neutral-500 max-w-xs mx-auto">
+            This ticket may have expired, or the identification link was incomplete.
+          </p>
+          <div className="pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                const lastQueueId = t?.queue_id || Object.keys(localStorage)
+                  .find((k) => k.startsWith("q_active_ticket_"))
+                  ?.replace("q_active_ticket_", "");
+                if (lastQueueId) {
+                  window.location.href = `/join/${lastQueueId}`;
+                } else {
+                  window.location.href = "/";
+                }
+              }}
+              className="inline-flex items-center justify-center rounded-full bg-[#111111] dark:bg-[#FBF9F5] px-6 py-3 font-mono text-xs font-bold uppercase tracking-wider text-[#FBF9F5] dark:text-[#111111] hover:opacity-90"
+            >
+              Scan QR Again →
+            </button>
+          </div>
+        </div>
       </Shell>
     );
   if (!t)

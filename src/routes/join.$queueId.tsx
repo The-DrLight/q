@@ -184,14 +184,27 @@ function JoinPage() {
       p_push_subscription: null,
     });
 
-    if (error || !data) {
+    if (error) {
       setBusy(false);
-      return setErr(error?.message ?? "Could not join the line.");
+      return setErr(error.message || "Failed to join queue");
     }
 
-    // 3. Instant Navigation
-    setActiveTicket(cleanQueueId, data);
-    navigate({ to: "/ticket/$ticketId", params: { ticketId: data } });
+    // Handle both string, array, and single object returns from RPC
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ticketRecord: any = Array.isArray(data) ? data[0] : data;
+    const returnedTicketId =
+      typeof data === "string"
+        ? data
+        : ticketRecord?.ticket_id || ticketRecord?.id;
+
+    if (!returnedTicketId) {
+      setBusy(false);
+      return setErr("Server failed to allocate a ticket number. Please try again.");
+    }
+
+    // 3. Instant Navigation & Local Storage
+    setActiveTicket(cleanQueueId, returnedTicketId);
+    navigate({ to: "/ticket/$ticketId", params: { ticketId: returnedTicketId } });
 
     // Optional background push subscription if user toggled alerts
     if (alerts && pushSubscription) {
@@ -199,7 +212,7 @@ function JoinPage() {
         supabase
           .from("tickets")
           .update({ push_subscription: JSON.parse(JSON.stringify(pushSubscription)) })
-          .eq("id", data)
+          .eq("id", returnedTicketId)
       ).catch(() => {});
     }
   }
