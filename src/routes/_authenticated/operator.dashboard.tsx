@@ -158,7 +158,12 @@ function Dashboard() {
     if (!activeQueueId) return;
     const cleanId = activeQueueId.trim();
 
-    console.log("Fetching tickets for queue:", cleanId);
+    const {
+      data: { user: currentUser },
+    } = await supabase.auth.getUser();
+
+    console.log("[DEBUG] activeQueueId:", cleanId);
+    console.log("[DEBUG] Current user:", currentUser?.id, currentUser?.email);
 
     // 1. Load queue metadata, operators, and dynamic buffer
     const [{ data: q }, { data: ops }, { data: bufSize }] = await Promise.all([
@@ -174,6 +179,16 @@ function Dashboard() {
       "get_operator_hopper_tickets",
       { p_queue_id: cleanId }
     );
+
+    console.log("[DEBUG] rpcTickets:", rpcTickets);
+    if (rpcError) {
+      console.error("[DEBUG] rpcError:", {
+        message: rpcError.message,
+        details: rpcError.details,
+        hint: rpcError.hint,
+        code: rpcError.code,
+      });
+    }
 
     if (!rpcError && Array.isArray(rpcTickets)) {
       console.log("Hopper tickets loaded via RPC:", rpcTickets.length);
@@ -191,6 +206,7 @@ function Dashboard() {
         console.error("Direct table select failed:", directError);
         setTickets([]);
       } else {
+        console.log("Direct table tickets retrieved:", directTickets?.length);
         setTickets((directTickets as Ticket[]) || []);
       }
     }
