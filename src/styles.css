@@ -104,3 +104,49 @@
   transform-origin: center;
   transform-box: fill-box;
 }
+
+@media print {
+  /* Hide standard page UI */
+  nav,
+  header,
+  footer,
+  aside,
+  button,
+  .no-print,
+  [data-print-hide="true"] {
+    display: none !important;
+  }
+
+  /* Hide entire screen console wrapper */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Reveal only the dedicated print poster container and its children */
+  .print-poster-container,
+  .print-poster-container * {
+    visibility: visible;
+  }
+
+  .print-poster-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    display: flex !important;
+  }
+
+  /* Reset body styles for pure white print output */
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  @page {
+    margin: 1cm;
+    size: auto;
+  }
+}
+

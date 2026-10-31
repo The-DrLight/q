@@ -1145,6 +1145,59 @@ function Dashboard() {
           if (newId) switchQueue(newId);
         }}
       />
+
+      {/* Print-Only Poster Element */}
+      <div className="print-poster-container hidden print:flex print:flex-col print:items-center print:justify-center print:min-h-screen print:p-8 print:bg-white text-black font-sans text-center">
+        <div className="border-4 border-black p-8 rounded-2xl max-w-lg w-full flex flex-col items-center">
+          {/* Header */}
+          <div className="font-mono text-3xl font-black tracking-tight mb-2 uppercase">
+            {queue?.title || "Virtual Queue"}
+          </div>
+          <div className="text-xs uppercase tracking-widest text-neutral-600 font-mono mb-8">
+            Zero-Install Mobile Check-In
+          </div>
+
+          {/* Big QR Code */}
+          <div className="p-4 bg-white border-2 border-black rounded-xl mb-8 flex items-center justify-center">
+            {qr ? (
+              <img
+                src={qr}
+                alt="Queue QR Code"
+                className="w-72 h-72 object-contain"
+              />
+            ) : (
+              <div className="w-72 h-72 bg-neutral-200" />
+            )}
+          </div>
+
+          {/* Clear 3-Step Instructions */}
+          <div className="text-left w-full space-y-3 font-mono text-xs border-t border-neutral-300 pt-6">
+            <div className="flex items-start gap-3">
+              <span className="font-bold text-sm bg-black text-white rounded-full w-5 h-5 flex items-center justify-center shrink-0">
+                1
+              </span>
+              <span>Scan the QR code with your phone camera to take your position.</span>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="font-bold text-sm bg-black text-white rounded-full w-5 h-5 flex items-center justify-center shrink-0">
+                2
+              </span>
+              <span>Keep your browser tab open; roam freely while waiting.</span>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="font-bold text-sm bg-black text-white rounded-full w-5 h-5 flex items-center justify-center shrink-0">
+                3
+              </span>
+              <span>Approach the desk when your ticket enters the physical line.</span>
+            </div>
+          </div>
+
+          {/* Footer Direct Link */}
+          <div className="mt-8 pt-4 text-[10px] text-neutral-500 font-mono">
+            Direct Link: {joinUrl}
+          </div>
+        </div>
+      </div>
     </main>
   );
 }
