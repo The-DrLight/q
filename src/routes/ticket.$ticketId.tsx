@@ -105,7 +105,7 @@ function TicketPage() {
       // Fetch queue title and venue name
       const { data: queueData } = await supabase
         .from("queues")
-        .select("title, venue_name, status")
+        .select("title, status")
         .eq("id", directTicket.queue_id)
         .maybeSingle();
 
@@ -129,7 +129,7 @@ function TicketPage() {
         status: directTicket.status,
         strikes: directTicket.strikes,
         queue_position: queuePosition,
-        venue_name: queueData?.venue_name || queueData?.title || "Venue",
+        venue_name: (queueData as any)?.venue_name || (queueData as any)?.venue_id || queueData?.title || "Venue",
         title: queueData?.title || "Virtual Queue",
         queue_status: queueData?.status || "OPEN",
         counter_name: null,

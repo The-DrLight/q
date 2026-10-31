@@ -88,14 +88,16 @@ function JoinPage() {
       // 1. Attempt direct select from public.queues
       const { data, error } = await supabase
         .from("queues")
-        .select("id,venue_name,title,status")
+        .select("id,title,status")
         .eq("id", cleanId)
         .maybeSingle();
 
       if (data) {
         setQueue({
-          ...data,
+          id: data.id,
+          title: data.title,
           status: data.status || "OPEN",
+          venue_name: (data as any).venue_name || (data as any).venue_id || data.title,
         });
         return;
       }

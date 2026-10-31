@@ -119,7 +119,7 @@ function Dashboard() {
           const fallbackMyQ: MyQueue = {
             queue_id: singleQ.id,
             title: singleQ.title,
-            venue_name: singleQ.venue_name,
+            venue_name: (singleQ as any).venue_name || (singleQ as any).venue_id || singleQ.title,
             status: singleQ.status || "OPEN",
             waiting_count: 0,
             serving_count: 0,
@@ -167,7 +167,7 @@ function Dashboard() {
 
     // 1. Load queue metadata, operators, and dynamic buffer
     const [{ data: q }, { data: ops }, { data: bufSize }] = await Promise.all([
-      supabase.from("queues").select("id,venue_name,title,status,expires_at,last_activity_at").eq("id", cleanId).maybeSingle(),
+      supabase.from("queues").select("id,title,status,expires_at,last_activity_at").eq("id", cleanId).maybeSingle(),
       supabase.from("operators").select("id,email,counter_name,role").eq("queue_id", cleanId),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: cleanId }),
@@ -192,12 +192,17 @@ function Dashboard() {
 
     if (!rpcError && Array.isArray(rpcTickets)) {
       console.log("Hopper tickets loaded via RPC:", rpcTickets.length);
-      setTickets(rpcTickets as Ticket[]);
+      const mapped = (rpcTickets as any[]).map((t) => ({
+        ...t,
+        served_at: t.served_at ?? t.updated_at ?? null,
+      }));
+      setTickets(mapped as Ticket[]);
     } else {
       console.warn("RPC fetch failed, falling back to direct table query:", rpcError);
+      // Query without non-existent columns (served_at) to avoid schema cache error 42703
       const { data: directTickets, error: directError } = await supabase
         .from("tickets")
-        .select("id,ticket_number,full_name,phone_number,status,strikes,sort_order,serving_operator_id,created_at,served_at")
+        .select("id,ticket_number,full_name,phone_number,status,strikes,sort_order,serving_operator_id,created_at,updated_at")
         .eq("queue_id", cleanId)
         .in("status", ["WAITING", "SERVING", "waiting", "serving"])
         .order("sort_order", { ascending: true });
@@ -207,14 +212,22 @@ function Dashboard() {
         setTickets([]);
       } else {
         console.log("Direct table tickets retrieved:", directTickets?.length);
-        setTickets((directTickets as Ticket[]) || []);
+        const mapped = ((directTickets as any[]) || []).map((t) => ({
+          ...t,
+          served_at: t.served_at ?? t.updated_at ?? null,
+        }));
+        setTickets(mapped as Ticket[]);
       }
     }
 
     if (q) {
       setQueue({
-        ...q,
+        id: q.id,
+        venue_name: (q as any).venue_name || (q as any).venue_id || q.title,
+        title: q.title,
         status: q.status || "OPEN",
+        expires_at: q.expires_at,
+        last_activity_at: q.last_activity_at,
       });
     }
 

@@ -48,7 +48,7 @@ function LobbyDisplayPage() {
 
   const loadData = useCallback(async () => {
     const [{ data: q }, { data: ts }, { data: ops }, { data: bufSize }] = await Promise.all([
-      supabase.from("queues").select("id,venue_name,title,status").eq("id", queueId).maybeSingle(),
+      supabase.from("queues").select("id,title,status").eq("id", queueId).maybeSingle(),
       supabase
         .from("tickets")
         .select("id,ticket_number,full_name,status,serving_operator_id,sort_order")
@@ -60,7 +60,14 @@ function LobbyDisplayPage() {
       (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: queueId }),
     ]);
 
-    if (q) setQueue(q);
+    if (q) {
+      setQueue({
+        id: q.id,
+        title: q.title,
+        status: q.status || "OPEN",
+        venue_name: (q as any).venue_name || (q as any).venue_id || q.title,
+      });
+    }
     const activeTickets = (ts as Ticket[]) ?? [];
     setTickets(activeTickets);
 
