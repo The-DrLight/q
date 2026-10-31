@@ -875,21 +875,20 @@ function Dashboard() {
                         className="flex flex-wrap items-center justify-between gap-3 py-3.5 transition-colors hover:bg-[#FBF9F5]/70"
                       >
                         <div className="flex items-center gap-4">
-                          {/* Live Position Badge */}
-                          <span className="text-xs font-mono font-bold px-2 py-1 bg-neutral-100 rounded text-neutral-600">
-                            Pos {idx + 1}
+                          {/* Clean Dynamic Queue Position */}
+                          <span className="text-2xl font-mono font-black text-black">
+                            #{idx + 1}
                           </span>
-                          {/* Permanent Ticket Number */}
-                          <span className="text-xl font-mono font-black text-black">
-                            #{t.ticket_number}
-                          </span>
-                          {/* Visitor Details */}
+
+                          {/* Visitor Name & Wait Details */}
                           <div>
-                            <div className="font-bold text-sm text-neutral-900">{t.full_name}</div>
-                            <div className="text-xs text-neutral-500 font-mono flex items-center gap-2">
+                            <div className="font-bold text-base text-neutral-900">
+                              {t.full_name}
+                            </div>
+                            <div className="text-xs text-neutral-500 font-mono flex items-center">
                               <span>{formatWait(t.created_at, now)}</span>
                               {t.strikes > 0 && (
-                                <span className="text-red-500 font-bold">
+                                <span className="text-red-500 ml-2 font-bold">
                                   ({t.strikes} strike{t.strikes > 1 ? "s" : ""})
                                 </span>
                               )}
@@ -941,18 +940,18 @@ function Dashboard() {
                         className="flex flex-wrap items-center justify-between gap-3 py-3 font-mono text-xs opacity-75 hover:opacity-100"
                       >
                         <div className="flex items-center gap-4">
-                          {/* Live Position Badge */}
-                          <span className="text-xs font-mono font-bold px-2 py-1 bg-neutral-100 rounded text-neutral-600">
-                            Pos {dynamicBuffer + idx + 1}
+                          {/* Clean Dynamic Queue Position */}
+                          <span className="text-xl font-mono font-black text-neutral-800">
+                            #{dynamicBuffer + idx + 1}
                           </span>
-                          {/* Permanent Ticket Number */}
-                          <span className="font-bold text-[#111111]">#{t.ticket_number}</span>
-                          <span className="text-[#111111]">{t.full_name}</span>
-                          {t.strikes > 0 && (
-                            <span className="text-[#E5484D] font-bold">
-                              ({t.strikes} strike{t.strikes > 1 ? "s" : ""})
-                            </span>
-                          )}
+                          <div>
+                            <span className="font-bold text-sm text-[#111111]">{t.full_name}</span>
+                            {t.strikes > 0 && (
+                              <span className="text-red-500 ml-2 font-bold">
+                                ({t.strikes} strike{t.strikes > 1 ? "s" : ""})
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <button

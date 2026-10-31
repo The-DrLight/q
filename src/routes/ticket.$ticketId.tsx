@@ -263,17 +263,26 @@ function TicketPage() {
   return (
     <Shell venue={`${t.venue_name} · ${t.title}`} pulse={<LivePulse tone={tone} />} isOnline={isOnline}>
       <div className="flex items-baseline justify-between border-b border-[#262626] pb-4">
-        <span className="font-mono text-xs uppercase tracking-wider text-neutral-400">Your Ticket</span>
-        <span className="font-mono text-xl font-black text-[#FBF9F5]">#{t.ticket_number}</span>
+        <span className="font-mono text-xs uppercase tracking-wider text-neutral-400">Queue Entry</span>
+        <span className="font-mono text-sm font-semibold text-neutral-400">{t.full_name}</span>
       </div>
 
       {t.status === "WAITING" && pos != null && (
         <div className="my-8">
-          <p className="font-mono text-xs uppercase tracking-widest text-neutral-400">Position in Line</p>
-          <p className="font-mono mt-2 text-[7.5rem] font-bold leading-none tracking-tight text-[#FBF9F5]">{pos}</p>
-          <p className="mt-4 font-mono text-base text-neutral-400">
-            {pos === 1 ? "You're next at the counter." : `${pos - 1} ${pos - 1 === 1 ? "person" : "people"} ahead of you`}
-          </p>
+          <p className="font-mono text-xs uppercase tracking-widest text-neutral-400 font-bold">YOUR POSITION IN LINE</p>
+          <p className="font-mono mt-2 text-[7.5rem] font-black leading-none tracking-tight text-[#FBF9F5]">#{pos}</p>
+          <div className="mt-4">
+            {pos === 1 ? (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-sm font-bold border border-emerald-500/30">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                You're Next — Head to Counter
+              </div>
+            ) : (
+              <p className="font-mono text-base text-neutral-400">
+                {pos - 1} {pos - 1 === 1 ? "person" : "people"} ahead of you
+              </p>
+            )}
+          </div>
         </div>
       )}
 
