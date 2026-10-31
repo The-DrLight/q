@@ -159,23 +159,41 @@ function Dashboard() {
     const cleanId = activeQueueId.trim();
 
     console.log("Fetching tickets for queue:", cleanId);
-    const [{ data: q }, { data: ts, error: tsError }, { data: ops }, { data: bufSize }] = await Promise.all([
+
+    // 1. Load queue metadata, operators, and dynamic buffer
+    const [{ data: q }, { data: ops }, { data: bufSize }] = await Promise.all([
       supabase.from("queues").select("id,venue_name,title,status,expires_at,last_activity_at").eq("id", cleanId).maybeSingle(),
-      supabase
-        .from("tickets")
-        .select("id,ticket_number,full_name,phone_number,status,strikes,sort_order,serving_operator_id,created_at,served_at")
-        .eq("queue_id", cleanId)
-        .in("status", ["WAITING", "waiting", "SERVING", "serving"])
-        .order("sort_order", { ascending: true }),
       supabase.from("operators").select("id,email,counter_name,role").eq("queue_id", cleanId),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: cleanId }),
     ]);
 
-    if (tsError) {
-      console.error("Failed to load hopper tickets:", tsError);
+    // 2. Load hopper tickets via dedicated get_operator_hopper_tickets RPC with fallback
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: rpcTickets, error: rpcError } = await (supabase.rpc as any)(
+      "get_operator_hopper_tickets",
+      { p_queue_id: cleanId }
+    );
+
+    if (!rpcError && Array.isArray(rpcTickets)) {
+      console.log("Hopper tickets loaded via RPC:", rpcTickets.length);
+      setTickets(rpcTickets as Ticket[]);
+    } else {
+      console.warn("RPC fetch failed, falling back to direct table query:", rpcError);
+      const { data: directTickets, error: directError } = await supabase
+        .from("tickets")
+        .select("id,ticket_number,full_name,phone_number,status,strikes,sort_order,serving_operator_id,created_at,served_at")
+        .eq("queue_id", cleanId)
+        .in("status", ["WAITING", "SERVING", "waiting", "serving"])
+        .order("sort_order", { ascending: true });
+
+      if (directError) {
+        console.error("Direct table select failed:", directError);
+        setTickets([]);
+      } else {
+        setTickets((directTickets as Ticket[]) || []);
+      }
     }
-    console.log("Raw tickets retrieved:", ts);
 
     if (q) {
       setQueue({
@@ -183,7 +201,6 @@ function Dashboard() {
         status: q.status || "OPEN",
       });
     }
-    setTickets((ts as Ticket[]) ?? []);
 
     if (ops) {
       setOperatorsList(ops);
