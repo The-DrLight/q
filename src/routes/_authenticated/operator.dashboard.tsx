@@ -156,18 +156,26 @@ function Dashboard() {
   // Load active queue data (tickets, operators, dynamic buffer)
   const load = useCallback(async () => {
     if (!activeQueueId) return;
-    const [{ data: q }, { data: ts }, { data: ops }, { data: bufSize }] = await Promise.all([
-      supabase.from("queues").select("id,venue_name,title,status,expires_at,last_activity_at").eq("id", activeQueueId).maybeSingle(),
+    const cleanId = activeQueueId.trim();
+
+    console.log("Fetching tickets for queue:", cleanId);
+    const [{ data: q }, { data: ts, error: tsError }, { data: ops }, { data: bufSize }] = await Promise.all([
+      supabase.from("queues").select("id,venue_name,title,status,expires_at,last_activity_at").eq("id", cleanId).maybeSingle(),
       supabase
         .from("tickets")
         .select("id,ticket_number,full_name,phone_number,status,strikes,sort_order,serving_operator_id,created_at,served_at")
-        .eq("queue_id", activeQueueId)
-        .in("status", ["WAITING", "SERVING"])
+        .eq("queue_id", cleanId)
+        .in("status", ["WAITING", "waiting", "SERVING", "serving"])
         .order("sort_order", { ascending: true }),
-      supabase.from("operators").select("id,email,counter_name,role").eq("queue_id", activeQueueId),
+      supabase.from("operators").select("id,email,counter_name,role").eq("queue_id", cleanId),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: activeQueueId }),
+      (supabase.rpc as any)("get_dynamic_buffer_size", { p_queue_id: cleanId }),
     ]);
+
+    if (tsError) {
+      console.error("Failed to load hopper tickets:", tsError);
+    }
+    console.log("Raw tickets retrieved:", ts);
 
     if (q) {
       setQueue({
@@ -195,14 +203,24 @@ function Dashboard() {
 
   useEffect(() => {
     if (!activeQueueId) return;
+    const cleanId = activeQueueId.trim();
     load();
     const ch = supabase
-      .channel(`desk-${activeQueueId}-${Math.random().toString(36).slice(2)}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "tickets", filter: `queue_id=eq.${activeQueueId}` }, () => {
-        load();
-        loadMyQueues();
-      })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "queues", filter: `id=eq.${activeQueueId}` }, () => load())
+      .channel(`desk-${cleanId}-${Math.random().toString(36).slice(2)}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tickets", filter: `queue_id=eq.${cleanId}` },
+        (payload) => {
+          console.log("Realtime ticket change detected:", payload);
+          load();
+          loadMyQueues();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "queues", filter: `id=eq.${cleanId}` },
+        () => load()
+      )
       .subscribe();
     const onVis = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVis);
@@ -418,24 +436,38 @@ function Dashboard() {
     navigate({ to: "/" });
   }
 
-  // Sieve tickets into groups
-  const servingTickets = useMemo(() => tickets.filter((t) => t.status === "SERVING"), [tickets]);
-  const waitingTickets = useMemo(() => tickets.filter((t) => t.status === "WAITING"), [tickets]);
+  // Sieve tickets into groups (case-insensitive)
+  const servingTickets = useMemo(
+    () => tickets.filter((t) => t.status?.toUpperCase() === "SERVING"),
+    [tickets]
+  );
+  const waitingTickets = useMemo(
+    () => tickets.filter((t) => t.status?.toUpperCase() === "WAITING"),
+    [tickets]
+  );
 
   // Buffer separation based on dynamic buffer size
   const onDeckBuffer = useMemo(() => waitingTickets.slice(0, dynamicBuffer), [waitingTickets, dynamicBuffer]);
   const offPremiseRoam = useMemo(() => waitingTickets.slice(dynamicBuffer), [waitingTickets, dynamicBuffer]);
 
   const filteredOnDeck = useMemo(() => {
-    if (!search.trim()) return onDeckBuffer;
-    const s = search.toLowerCase();
-    return onDeckBuffer.filter((t) => t.ticket_number.toString().includes(s) || t.full_name.toLowerCase().includes(s));
+    if (!search || !search.trim()) return onDeckBuffer;
+    const s = search.trim().toLowerCase();
+    return onDeckBuffer.filter(
+      (t) =>
+        t.ticket_number.toString().includes(s) ||
+        (t.full_name && t.full_name.toLowerCase().includes(s))
+    );
   }, [onDeckBuffer, search]);
 
   const filteredRoam = useMemo(() => {
-    if (!search.trim()) return offPremiseRoam;
-    const s = search.toLowerCase();
-    return offPremiseRoam.filter((t) => t.ticket_number.toString().includes(s) || t.full_name.toLowerCase().includes(s));
+    if (!search || !search.trim()) return offPremiseRoam;
+    const s = search.trim().toLowerCase();
+    return offPremiseRoam.filter(
+      (t) =>
+        t.ticket_number.toString().includes(s) ||
+        (t.full_name && t.full_name.toLowerCase().includes(s))
+    );
   }, [offPremiseRoam, search]);
 
   // Loading indicator
