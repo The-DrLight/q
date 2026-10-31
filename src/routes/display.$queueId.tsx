@@ -23,7 +23,6 @@ type Queue = { id: string; venue_name: string; title: string; status: string };
 type Ticket = {
   id: string;
   ticket_number: number;
-  full_name: string;
   status: string;
   serving_operator_id: string | null;
   sort_order: number;
@@ -52,7 +51,7 @@ function LobbyDisplayPage() {
       supabase.from("queues").select("id,title,status").eq("id", queueId).maybeSingle(),
       supabase
         .from("tickets")
-        .select("id,ticket_number,full_name,status,serving_operator_id,sort_order")
+        .select("id,ticket_number,status,serving_operator_id,sort_order")
         .eq("queue_id", queueId)
         .in("status", ["WAITING", "SERVING"])
         .order("sort_order", { ascending: true }),

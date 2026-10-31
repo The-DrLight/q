@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { clearActiveTicket, getActiveTicket, getClientUuid, setActiveTicket } from "@/lib/q";
+import { sanitizeInput } from "@/lib/sanitize";
 
 export const Route = createFileRoute("/join/$queueId")({
   head: () => ({
@@ -177,11 +178,20 @@ function JoinPage() {
 
     const cleanQueueId = queueId.trim();
 
+    // Sanitize input: strip script/style tags, raw HTML, and enforce length limit
+    const cleanName = sanitizeInput(name).slice(0, 80);
+    const cleanPhone = sanitizeInput(phone).slice(0, 30);
+
+    if (!cleanName) {
+      setBusy(false);
+      return setErr("Please provide a valid name.");
+    }
+
     // 2. Immediate, Non-Blocking Submission (pass null push_subscription)
     const { data, error } = await supabase.rpc("join_queue", {
       p_queue_id: cleanQueueId,
-      p_full_name: name.trim().slice(0, 80),
-      p_phone_number: phone.trim().slice(0, 30),
+      p_full_name: cleanName,
+      p_phone_number: cleanPhone,
       p_client_uuid: clientUuid,
       p_push_subscription: null,
     });
