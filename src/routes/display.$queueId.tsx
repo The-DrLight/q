@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { LivePulse } from "@/components/LivePulse";
 import { formatLagosTime, playChime } from "@/lib/q";
+import { formatTicketCode } from "@/lib/formatTicketCode";
 
 export const Route = createFileRoute("/display/$queueId")({
   head: () => ({
@@ -191,11 +192,14 @@ function LobbyDisplayPage() {
                   </div>
 
                   <div className="my-8 text-center">
-                    <p className="font-mono text-7xl md:text-9xl font-black leading-none tracking-tighter text-[#FBF9F5]">
-                      #{t.ticket_number}
+                    <p className="font-mono text-xs md:text-sm tracking-widest uppercase text-emerald-400 font-bold mb-3">
+                      NOW SERVING
                     </p>
-                    <p className="font-mono text-xl md:text-2xl font-semibold text-neutral-300 mt-4 truncate">
-                      {t.full_name}
+                    <p className="font-mono text-7xl md:text-9xl font-black leading-none tracking-tighter text-[#FBF9F5]">
+                      {formatTicketCode(t.ticket_number)}
+                    </p>
+                    <p className="font-mono text-base md:text-lg uppercase tracking-wider text-neutral-400 mt-4">
+                      PROCEED TO {counter.toUpperCase()}
                     </p>
                   </div>
 
@@ -223,10 +227,10 @@ function LobbyDisplayPage() {
                   NOW SERVING
                 </p>
                 <p className="font-mono text-7xl md:text-9xl font-black leading-none tracking-tighter text-[#FBF9F5]">
-                  #1
+                  {formatTicketCode(activeHeroTicket.ticket_number)}
                 </p>
-                <p className="font-mono text-2xl md:text-3xl font-bold text-neutral-200 mt-4 truncate">
-                  {activeHeroTicket.full_name}
+                <p className="font-mono text-base md:text-lg uppercase tracking-wider text-neutral-400 mt-4">
+                  PROCEED TO DESK 1
                 </p>
               </div>
 
@@ -261,7 +265,6 @@ function LobbyDisplayPage() {
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
           {Array.from({ length: hasServing ? 5 : 4 }).map((_, i) => {
             const slotNumber = hasServing ? i + 1 : i + 2;
-            const rankNumber = hasServing ? i + 1 : i + 2;
             const ticket = onDeckTickets[i];
             return (
               <div
@@ -275,10 +278,10 @@ function LobbyDisplayPage() {
                 {ticket ? (
                   <>
                     <div className="text-3xl font-black font-mono text-white">
-                      #{rankNumber}
+                      {formatTicketCode(ticket.ticket_number)}
                     </div>
-                    <div className="text-xs text-neutral-400 font-medium truncate">
-                      {ticket.full_name}
+                    <div className="text-xs text-neutral-500 font-mono mt-1">
+                      Slot P{slotNumber}
                     </div>
                   </>
                 ) : (

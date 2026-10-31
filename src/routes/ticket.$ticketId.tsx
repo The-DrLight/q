@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { LivePulse } from "@/components/LivePulse";
 import { DEFAULT_BUFFER_SIZE, MAX_STRIKES, clearActiveTicket, formatLagosTime, getClientUuid, notify } from "@/lib/q";
+import { formatTicketCode } from "@/lib/formatTicketCode";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -262,9 +263,23 @@ function TicketPage() {
 
   return (
     <Shell venue={`${t.venue_name} · ${t.title}`} pulse={<LivePulse tone={tone} />} isOnline={isOnline}>
-      <div className="flex items-baseline justify-between border-b border-[#262626] pb-4">
-        <span className="font-mono text-xs uppercase tracking-wider text-neutral-400">Queue Entry</span>
-        <span className="font-mono text-sm font-semibold text-neutral-400">{t.full_name}</span>
+      <div className="flex items-center justify-between border-b border-[#262626] pb-4">
+        <div>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-neutral-400 block">
+            YOUR TICKET CODE
+          </span>
+          <span className="font-mono text-2xl font-black tracking-wide text-white">
+            {formatTicketCode(t.ticket_number)}
+          </span>
+        </div>
+        <div className="text-right">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-neutral-500 block">
+            Visitor
+          </span>
+          <span className="font-mono text-sm font-semibold text-neutral-300">
+            {t.full_name}
+          </span>
+        </div>
       </div>
 
       {t.status === "WAITING" && pos != null && (
@@ -283,6 +298,11 @@ function TicketPage() {
               </p>
             )}
           </div>
+          <div className="mt-4 border border-[#262626] bg-[#111111] p-3 text-center">
+            <p className="font-mono text-xs text-neutral-400">
+              Show ticket code <span className="font-bold text-white font-mono">{formatTicketCode(t.ticket_number)}</span> to the operator at the desk.
+            </p>
+          </div>
         </div>
       )}
 
@@ -293,6 +313,11 @@ function TicketPage() {
           <p className="mt-2 font-mono text-sm text-neutral-300">
             Please proceed immediately to {t.counter_name ?? "the counter desk"}.
           </p>
+          <div className="mt-4 pt-4 border-t border-emerald-500/30 text-center">
+            <p className="font-mono text-xs text-emerald-400">
+              Show ticket code <span className="font-bold text-white font-mono">{formatTicketCode(t.ticket_number)}</span> to the operator at the desk.
+            </p>
+          </div>
         </div>
       )}
 
